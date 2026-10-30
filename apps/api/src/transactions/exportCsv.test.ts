@@ -207,3 +207,23 @@ test("a reference that looks like a spreadsheet formula is exported as text", as
   const line = csv.split("\n")[1]!;
   assert.ok(line.includes(`"'=HYPERLINK(""http://evil.example"",""refund"")"`), line);
 });
+
+test("paging never skips or repeats rows that share a timestamp across a page boundary", async () => {
+  const merchantId = await createMerchant();
+  const ids: string[] = [];
+  for (let i = 0; i < 5; i++) {
+    ids.push(
+      await insertTransaction(merchantId, {
+        status: "captured",
+        amountFils: 1000 + i,
+        capturedFils: 1000 + i,
+        reference: `same-ts-${i}`,
+        occurredAt: "2026-04-05T10:00:00.123456Z",
+      }),
+    );
+  }
+  const csv = await buildTransactionsExportCsv(pool, { merchantId }, 2);
+  const exported = csv.split("\n").slice(1).map((l) => l.split(",")[0]);
+  assert.deepEqual(new Set(exported), new Set(ids));
+  assert.equal(exported.length, 5);
+});

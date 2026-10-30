@@ -491,3 +491,15 @@ test("capturing the rest after refunding an earlier partial capture leaves the s
   assert.equal(Number(row.rows[0]!.refunded_fils), 4_000);
   assert.equal(row.rows[0]!.status, "partially_refunded", "4 BD of the 10 BD captured went back");
 });
+
+test("GET /v1/transactions/export streams a CSV with a header and the merchant's rows", async () => {
+  const { rawKey } = await createApprovedMerchantWithApiKey("export-stream");
+  const txn = await authorize(rawKey, 1_500);
+  const res = await app.inject({ method: "GET", url: "/v1/transactions/export", headers: authHeader(rawKey) });
+  assert.equal(res.statusCode, 200, res.body);
+  assert.match(String(res.headers["content-type"]), /text\/csv/);
+  const lines = res.body.split("\n");
+  assert.equal(lines[0], "id,status,amount_bhd,captured_bhd,reference,occurred_at");
+  assert.equal(lines.length, 2);
+  assert.ok(lines[1]!.startsWith(txn.id));
+});
