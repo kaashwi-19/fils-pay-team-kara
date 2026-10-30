@@ -599,3 +599,45 @@ func TestCloseBatch_RefusesADayThatHasNotEnded(t *testing.T) {
 		t.Fatalf("CloseBatch(today) err = %v, want ErrBusinessDayNotOver", err)
 	}
 }
+
+// A day with more refunds than sales must not produce a negative payout that
+// is silently forgiven: the refund rolls into the next day's batch.
+func TestCloseBatch_RefundsLargerThanTheDayRollForward(t *testing.T) {
+	pool := mustPool(t)
+	ctx := context.Background()
+	const mdrBps = 250
+	merchantID := insertActiveMerchant(t, pool, mdrBps)
+
+	day1 := time.Date(2026, 5, 10, 0, 0, 0, 0, time.UTC)
+	day2 := day1.AddDate(0, 0, 1)
+	start1, _ := BusinessDayWindow(day1)
+	start2, _ := BusinessDayWindow(day2)
+
+	bigTxn, _ := insertCaptureEvent(t, pool, merchantID, mdrBps, 20000, start1.Add(-48*time.Hour))
+	insertCaptureEvent(t, pool, merchantID, mdrBps, 1000, start1.Add(time.Hour))
+	_, err := pool.Exec(ctx, `
+		INSERT INTO refunds (transaction_id, merchant_id, amount_fils, fee_reversed_fils, status,
+		                     acquirer_reference, reason, created_by_type, created_by_id, occurred_at)
+		VALUES ($1, $2, 5000, 125, 'succeeded', 'acq-refund', 'test', 'merchant_api_key', $3, $4)
+	`, bigTxn, merchantID, uuid.New(), start1.Add(2*time.Hour))
+	if err != nil {
+		t.Fatalf("insert refund: %v", err)
+	}
+
+	r1, err := CloseBatch(ctx, pool, merchantID, day1)
+	if err != nil {
+		t.Fatalf("CloseBatch day1: %v", err)
+	}
+	if r1.NetPayoutFils < 0 {
+		t.Fatalf("day1 net payout = %d, must never be negative", r1.NetPayoutFils)
+	}
+
+	_, fee2 := insertCaptureEvent(t, pool, merchantID, mdrBps, 10000, start2.Add(time.Hour))
+	r2, err := CloseBatch(ctx, pool, merchantID, day2)
+	if err != nil {
+		t.Fatalf("CloseBatch day2: %v", err)
+	}
+	if want := money.Fils(10000-5000) - (fee2 - 125); r2.NetPayoutFils != want {
+		t.Fatalf("day2 net payout = %d, want %d (the refund rolled forward)", r2.NetPayoutFils, want)
+	}
+}

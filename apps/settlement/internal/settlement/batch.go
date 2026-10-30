@@ -226,25 +226,33 @@ func CloseBatch(ctx context.Context, db *pgxpool.Pool, merchantID uuid.UUID, bus
 		batchGross += grossForTxn
 		batchFee += feeForTxn
 	}
-	// Step 8b: refunds that happened in this business day (FP-212). Each
-	// refund gives money back to the cardholder and returns its share of
-	// the fee, so it reduces both what the merchant is paid and the fee.
-	// Claimed and locked exactly like capture events, so a refund lands in
-	// exactly one batch.
+	// Step 8b: refunds (FP-212). Each refund gives money back to the
+	// cardholder and returns its share of the fee, so it reduces both what
+	// the merchant is paid and the fee. Claimed and locked like capture
+	// events, so a refund lands in exactly one batch.
+	//
+	// Any unbatched refund up to the end of this day is eligible (not only
+	// this day's), oldest first, and only as many as this batch's captures
+	// can cover: a day with more refunds than sales would otherwise produce a
+	// negative payout, which PayoutBatch cannot pay, and the shortfall would
+	// be silently forgiven. Refunds that don't fit stay unbatched and roll
+	// into the next day's batch.
 	refundRows, err := tx.Query(ctx, `
 		SELECT id, amount_fils, fee_reversed_fils
 		  FROM refunds
 		 WHERE merchant_id = $1
 		   AND status = 'succeeded'
 		   AND settlement_batch_id IS NULL
-		   AND occurred_at >= $2 AND occurred_at < $3
+		   AND occurred_at < $2
+		 ORDER BY occurred_at, id
 		 FOR UPDATE
-	`, merchantID, start, end)
+	`, merchantID, end)
 	if err != nil {
 		return BatchResult{}, fmt.Errorf("settlement: CloseBatch: select refunds: %w", err)
 	}
 	var refundIDs []uuid.UUID
 	var refundGross, refundFeeReversed money.Fils
+	available := batchGross - batchFee
 	for refundRows.Next() {
 		var id uuid.UUID
 		var amount, feeReversed int64
@@ -252,6 +260,11 @@ func CloseBatch(ctx context.Context, db *pgxpool.Pool, merchantID uuid.UUID, bus
 			refundRows.Close()
 			return BatchResult{}, fmt.Errorf("settlement: CloseBatch: scan refund: %w", err)
 		}
+		cost := money.Fils(amount) - money.Fils(feeReversed)
+		if cost > available {
+			break // keep strict date order: this and later refunds roll forward
+		}
+		available -= cost
 		refundIDs = append(refundIDs, id)
 		refundGross += money.Fils(amount)
 		refundFeeReversed += money.Fils(feeReversed)
