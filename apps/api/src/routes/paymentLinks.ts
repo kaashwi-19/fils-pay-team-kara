@@ -141,6 +141,13 @@ export async function paymentLinkMerchantRoutes(app: FastifyInstance): Promise<v
  * prefix '/v1/payment-links'.
  */
 export async function paymentLinkPublicRoutes(app: FastifyInstance): Promise<void> {
+  // Postmortem 2026-05 action 6 (FP-207) is marked Done but was never in the
+  // code: a cached copy of the link page let a second customer pay a link
+  // that was already paid. Nothing on these routes may be cached.
+  app.addHook("onSend", async (_request, reply) => {
+    reply.header("cache-control", "no-store");
+  });
+
   app.get<{ Params: TokenParams }>("/:token", async (request) => {
     const link = await getPublicPaymentLink(
       app.db,

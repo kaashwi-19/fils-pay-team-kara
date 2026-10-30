@@ -386,3 +386,12 @@ test("a payment link for 0 fils is refused", async () => {
   });
   assert.equal(res.statusCode, 400, res.body);
 });
+
+test("the public link page and pay responses are never cached (postmortem action FP-207)", async () => {
+  const { rawKey, merchantId } = await createApprovedMerchantWithApiKey("no-store");
+  const link = await createLink(rawKey, merchantId, { amountFils: 1_000 });
+  const read = await getPublicLink(link.token);
+  assert.equal(read.headers["cache-control"], "no-store");
+  const paid = await pay(link.token, APPROVED_CARD);
+  assert.equal(paid.headers["cache-control"], "no-store");
+});
