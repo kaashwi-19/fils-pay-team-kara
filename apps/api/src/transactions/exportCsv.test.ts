@@ -193,3 +193,17 @@ test("a reference containing a comma or a quote is CSV-escaped", async () => {
 
   assert.ok(dataLine.includes('"inv-1,""urgent"""'));
 });
+
+test("a reference that looks like a spreadsheet formula is exported as text", async () => {
+  const merchantId = await createMerchant();
+  await insertTransaction(merchantId, {
+    status: "captured",
+    amountFils: 1000,
+    capturedFils: 1000,
+    reference: '=HYPERLINK("http://evil.example","refund")',
+    occurredAt: "2026-04-03T10:00:00Z",
+  });
+  const csv = await buildTransactionsExportCsv(pool, { merchantId });
+  const line = csv.split("\n")[1]!;
+  assert.ok(line.includes(`"'=HYPERLINK(""http://evil.example"",""refund"")"`), line);
+});

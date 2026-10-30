@@ -10,7 +10,13 @@ export interface TransactionsExportFilters {
 }
 
 function csvEscape(value: string): string {
-  if (value.includes(",") || value.includes('"') || value.includes("\n")) {
+  // A cell starting with = + - @ (or a tab/CR) is run as a formula when the
+  // file is opened in Excel or Sheets. The reference is free text from the
+  // merchant's integration, so neutralise it with a leading apostrophe.
+  if (/^[=+\-@\t\r]/.test(value)) {
+    value = `'${value}`;
+  }
+  if (value.includes(",") || value.includes('"') || value.includes("\n") || value.includes("\r")) {
     return `"${value.replace(/"/g, '""')}"`;
   }
   return value;
