@@ -39,6 +39,10 @@ export async function createPaymentLink(
   } catch (err) {
     throw new BadRequestError("invalid_amount", err instanceof Error ? err.message : String(err));
   }
+  if (amountFils <= 0) {
+    // A 0-fils link "paid" a 0-fils authorization: a payment for nothing.
+    throw new BadRequestError("invalid_amount", "amountFils must be greater than zero");
+  }
 
   const expiresAtDate = new Date(input.expiresAt);
   if (Number.isNaN(expiresAtDate.getTime()) || expiresAtDate.getTime() <= Date.now()) {

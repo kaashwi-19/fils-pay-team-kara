@@ -25,8 +25,6 @@ export interface PublicPaymentLinkDto {
   description: string | null;
   status: string;
   expiresAt: string;
-  merchantPublicKey: string | null;
-  merchantIntegrationId: string | null;
 }
 
 /** `GET /v1/payment-links/:token` — public, unauthenticated. */
@@ -40,18 +38,14 @@ export async function getPublicPaymentLink(
   const result = await pool.query<PublicPaymentLinkRow>(
     `SELECT pl.token, pl.amount_fils, pl.currency, pl.reference, pl.description,
             pl.status, pl.expires_at, pl.reserved_at, m.display_name AS merchant_display_name,
-            ak.key_prefix AS merchant_public_key,
-            ak.key_hash AS integration_id
+            NULL::text AS merchant_public_key, NULL::text AS integration_id
        FROM payment_links pl
        JOIN merchants m ON m.id = pl.merchant_id
-       LEFT JOIN LATERAL (
-         SELECT key_prefix, key_hash
-           FROM api_keys
-          WHERE merchant_id = pl.merchant_id AND revoked_at IS NULL
-          ORDER BY created_at DESC
-          LIMIT 1
-       ) ak ON true
       WHERE pl.token = $1`,
+    // This public, unauthenticated page used to return the merchant's newest
+    // live API key prefix (16 characters OF THE SECRET KEY) and its unsalted
+    // sha256 hash — enough to check guesses at the rest of the key offline.
+    // An API key is a secret, not a "public key"; nothing here needs it.
     [token],
   );
   const row = result.rows[0];
@@ -70,7 +64,5 @@ export async function getPublicPaymentLink(
       reservationTimeoutSeconds,
     ),
     expiresAt: row.expires_at.toISOString(),
-    merchantPublicKey: row.merchant_public_key,
-    merchantIntegrationId: row.integration_id,
   };
 }

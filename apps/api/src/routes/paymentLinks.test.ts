@@ -123,7 +123,10 @@ test("create -> public read (active) -> pay (approved) -> public read (paid) -> 
   assert.equal(readActive.statusCode, 200, readActive.body);
   assert.equal(readActive.json().status, "active");
   assert.equal(readActive.json().amountFils, 4_750);
-  assert.ok(readActive.json().merchantPublicKey?.startsWith("fp_"));
+  // The public page must not reveal any part of the merchant's API key.
+  assert.equal(readActive.json().merchantPublicKey, undefined);
+  assert.equal(readActive.json().merchantIntegrationId, undefined);
+  assert.ok(!readActive.body.includes("fp_"), "no API key material on the public page");
 
   const payRes = await pay(link.token, APPROVED_CARD);
   assert.equal(payRes.statusCode, 200, payRes.body);
@@ -371,4 +374,15 @@ test("a payment-link payment gets the merchant's negotiated discount, same as a 
     [txnId],
   );
   assert.ok((adj.rowCount ?? 0) > 0, "the discount adjustment must be posted for payment-link captures");
+});
+
+test("a payment link for 0 fils is refused", async () => {
+  const { merchantId, rawKey } = await createApprovedMerchantWithApiKey("plink-zero");
+  const res = await app.inject({
+    method: "POST",
+    url: `/v1/merchants/${merchantId}/payment-links`,
+    headers: authHeader(rawKey),
+    payload: { amountFils: 0, expiresAt: new Date(Date.now() + 3_600_000).toISOString() },
+  });
+  assert.equal(res.statusCode, 400, res.body);
 });
