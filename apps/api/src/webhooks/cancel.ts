@@ -13,7 +13,7 @@ export type DeleteWebhookEndpointResult = "deleted" | "not_found";
  * endpoint registration that produced it being removed.
  */
 // FH: docblock says deliveries are kept and there's no ON DELETE CASCADE — then the FK blocks the DELETE and we 500?
-// It was not (no ON DELETE action, endpoint_id NOT NULL) — fixed in migration 0079.
+// It was not (no ON DELETE action, endpoint_id NOT NULL) — fixed in migration 0080.
 export async function deleteWebhookEndpoint(
   pool: Pool,
   input: { merchantId: string; id: string },

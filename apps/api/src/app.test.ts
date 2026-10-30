@@ -108,7 +108,8 @@ async function signupLoginAndVerify(emailPrefix: string) {
   });
   assert.equal(verifyRes.statusCode, 200, verifyRes.body);
 
-  return { merchantId, email, password, cookie };
+  // The session token is rotated at OTP verification; only the new cookie works.
+  return { merchantId, email, password, cookie: parseCookie(verifyRes.headers["set-cookie"]) };
 }
 
 function buildMultipart(
@@ -414,4 +415,23 @@ test("after OTP verify the session cookie lives as long as the session, not the 
   const setCookie = String(verify.headers["set-cookie"] ?? "");
   const maxAge = Number(/Max-Age=(\d+)/i.exec(setCookie)?.[1] ?? 0);
   assert.equal(maxAge, config.sessionTtlHours * 3600);
+});
+
+test("session fixation: the pre-OTP cookie stops working once the OTP is verified; the new one lasts the full session", async () => {
+  const password = "fixation-password-123";
+  const { merchantId, email } = await signup("fixation", password);
+  const loginRes = await app.inject({ method: "POST", url: "/v1/auth/login", payload: { merchantId, email, password } });
+  const pendingCookie = parseCookie(loginRes.headers["set-cookie"]);
+  const code = (loginRes.json() as { devOtpCode: string }).devOtpCode;
+  const verifyRes = await app.inject({ method: "POST", url: "/v1/auth/otp/verify", headers: { cookie: pendingCookie }, payload: { code } });
+  assert.equal(verifyRes.statusCode, 200, verifyRes.body);
+  const setCookie = String(verifyRes.headers["set-cookie"]);
+  assert.match(setCookie, new RegExp(`Max-Age=${config.sessionTtlHours * 3600}`));
+  const freshCookie = parseCookie(verifyRes.headers["set-cookie"]);
+  assert.notEqual(freshCookie, pendingCookie);
+
+  const withOld = await app.inject({ method: "GET", url: "/v1/auth/me", headers: { cookie: pendingCookie } });
+  assert.equal(withOld.statusCode, 401, "a copied pre-OTP cookie must not become a logged-in session");
+  const withNew = await app.inject({ method: "GET", url: "/v1/auth/me", headers: { cookie: freshCookie } });
+  assert.equal(withNew.statusCode, 200, withNew.body);
 });

@@ -174,9 +174,11 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         throw new UnauthorizedError("invalid_code");
       }
 
+      let freshToken = "";
       const merchantUserResult = await withTransaction(app.db, async (client) => {
         await client.query(`UPDATE otp_challenges SET consumed_at = now() WHERE id = $1`, [challenge.id]);
-        await promoteSession(client, pending.sessionId, app.config.sessionTtlHours);
+        // New token on promotion: the pre-OTP cookie stops working (session fixation).
+        freshToken = (await promoteSession(client, pending.sessionId, app.config.sessionTtlHours)).rawToken;
         const result = await client.query<{ merchant_id: string; role: "owner" | "finance" | "support" }>(
           `SELECT merchant_id, role FROM merchant_users WHERE id = $1`,
           [pending.merchantUserId],
@@ -191,7 +193,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       // does. The login cookie was set with the 10-minute pending lifetime
       // and never refreshed, so the browser dropped a valid 12-hour session
       // after 10 minutes (the "10 min logouts").
-      reply.setCookie(app.config.cookieName, rawToken, {
+      reply.setCookie(app.config.cookieName, freshToken, {
         httpOnly: true,
         path: "/",
         sameSite: "lax",

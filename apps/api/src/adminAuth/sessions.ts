@@ -62,19 +62,22 @@ export async function createPendingAdminSession(
  * the codebase that ever sets `admin_sessions.authenticated = true` — always
  * at OTP verification success, never at token issuance.
  */
-// YA: token not rotated on promote -> fixation. FP-198 (repro: copy the pending cookie into a 2nd browser before OTP)
-// MK: the 2nd browser still needs the OTP. unresolved
+// Rotates the token on promotion (session fixation, FP-198): a copy of the
+// pending cookie taken before the OTP — in a 2nd browser, or planted by an
+// attacker — used to become a fully logged-in admin session the moment the
+// real admin typed the OTP. Now only the fresh token returned here works.
 export async function promoteAdminSession(
   client: PoolClient,
   adminSessionId: string,
   sessionTtlHours: number,
-): Promise<Date> {
+): Promise<{ expiresAt: Date; rawToken: string }> {
   const expiresAt = new Date(Date.now() + sessionTtlHours * 3_600_000);
+  const rawToken = randomToken(32);
   await client.query(
-    `UPDATE admin_sessions SET authenticated = true, authenticated_at = now(), expires_at = $2 WHERE id = $1`,
-    [adminSessionId, expiresAt],
+    `UPDATE admin_sessions SET authenticated = true, authenticated_at = now(), expires_at = $2, token_hash = $3 WHERE id = $1`,
+    [adminSessionId, expiresAt, sha256Hex(rawToken)],
   );
-  return expiresAt;
+  return { expiresAt, rawToken };
 }
 
 /**
