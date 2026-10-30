@@ -303,17 +303,31 @@ export function startWebhookDispatcher(pool: Pool, transport: WebhookTransport, 
   let running = false;
   let stopped = false;
 
+  // Same pattern as the reporting consumer: a NOTIFY that arrives during a
+  // pass used to be dropped, and a pass only creates 500 / attempts 100
+  // deliveries, so a burst waited for the 5 s poll in 100-delivery steps.
+  let rerun = false;
   const triggerPass = (): void => {
-    if (running || stopped) return;
+    if (stopped) return;
+    if (running) {
+      rerun = true;
+      return;
+    }
     running = true;
+    rerun = false;
     runDispatchPass(pool, transport, config)
+      .then(({ createdCount, attemptedCount }) => {
+        if (createdCount >= STEP_A_BATCH_LIMIT || attemptedCount >= STEP_B_BATCH_LIMIT) rerun = true;
+      })
       .catch((err: unknown) => {
         // A thrown error from one pass must never crash the listener or
         // the process — the next NOTIFY or poll tick simply tries again.
         console.error("[webhooks/dispatcher] dispatch pass failed", err);
+        rerun = false;
       })
       .finally(() => {
         running = false;
+        if (rerun) setImmediate(triggerPass);
       });
   };
 
