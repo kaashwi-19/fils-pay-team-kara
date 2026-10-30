@@ -146,14 +146,25 @@ func recomputeBatchFee(ctx context.Context, tx pgx.Tx, batchID uuid.UUID, mdrBps
 		if err := rows.Scan(&amountFils); err != nil {
 			return 0, fmt.Errorf("settlement: RecalculateMDR: scan batch event for %s: %w", batchID, err)
 		}
-		// FH: sums every event with this batch id -- incl. refund events once FP-212 lands? need an event_type filter?
-		// MK: refunds won't carry settlement_batch_id on transaction_events, they live in their own table. non-issue
 		fee += ComputeSettlementFee(money.Fils(amountFils), mdrBps, discountBps)
 	}
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("settlement: RecalculateMDR: iterate batch events for %s: %w", batchID, err)
 	}
-	return fee, nil
+	rows.Close()
+
+	// Refunds settled in this batch (FP-212) live in their own table, and
+	// CloseBatch nets their fee reversal out of the batch fee. Leaving them
+	// out here made every batch with a refund look under-charged by exactly
+	// that reversal, so a recalculation — even at an unchanged rate —
+	// charged the merchant the refunded fee a second time.
+	var reversed int64
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(SUM(fee_reversed_fils), 0) FROM refunds WHERE settlement_batch_id = $1
+	`, batchID).Scan(&reversed); err != nil {
+		return 0, fmt.Errorf("settlement: RecalculateMDR: sum batch refunds for %s: %w", batchID, err)
+	}
+	return fee - money.Fils(reversed), nil
 }
 
 // postMdrAdjustment posts the two-leg, entry_group_id-balanced pair for one

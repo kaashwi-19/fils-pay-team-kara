@@ -238,3 +238,33 @@ func TestRecalculateMDR_OutOfRangeBatchUntouched(t *testing.T) {
 // compile-time assertion that RecalculateMDR keeps the *pgxpool.Pool
 // signature the internal API handler passes it.
 var _ func(context.Context, *pgxpool.Pool, uuid.UUID, time.Time, time.Time) (RecalcResult, error) = RecalculateMDR
+
+func TestRecalculateMDR_BatchWithARefundAtAnUnchangedRateAdjustsNothing(t *testing.T) {
+	pool := mustPool(t)
+	ctx := context.Background()
+	const mdrBps = 250
+	merchantID := insertActiveMerchant(t, pool, mdrBps)
+
+	businessDate := time.Date(2026, 4, 6, 0, 0, 0, 0, time.UTC)
+	start, _ := BusinessDayWindow(businessDate)
+	txnID, _ := insertCaptureEvent(t, pool, merchantID, mdrBps, 10_000, start.Add(time.Hour))
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO refunds (transaction_id, merchant_id, amount_fils, fee_reversed_fils, status,
+		                     acquirer_reference, reason, created_by_type, created_by_id, occurred_at)
+		VALUES ($1, $2, 4000, 100, 'succeeded', 'acq-refund', 'test', 'merchant_api_key', $3, $4)
+	`, txnID, merchantID, uuid.New(), start.Add(2*time.Hour)); err != nil {
+		t.Fatalf("insert refund: %v", err)
+	}
+	if _, err := CloseBatch(ctx, pool, merchantID, businessDate); err != nil {
+		t.Fatalf("CloseBatch: %v", err)
+	}
+
+	from, to := recalcWindow(businessDate)
+	result, err := RecalculateMDR(ctx, pool, merchantID, from, to)
+	if err != nil {
+		t.Fatalf("RecalculateMDR: %v", err)
+	}
+	if len(result.Adjusted) != 0 {
+		t.Fatalf("Adjusted = %+v, want none: the rate did not change, so the refund's fee must not be charged again", result.Adjusted)
+	}
+}
