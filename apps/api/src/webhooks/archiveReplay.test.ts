@@ -59,9 +59,12 @@ async function insertDelivery(
   opts: { eventType: string; createdAt: string },
 ): Promise<string> {
   const outbox = await pool.query<{ id: string }>(
-    `INSERT INTO outbox_events (event_type, aggregate_type, aggregate_id, payload)
-     VALUES ($1, 'transaction', $2, '{}'::jsonb) RETURNING id`,
-    [opts.eventType, randomUUID()],
+    // An inert outbox event_type (like admin.test.ts's fixtures): the delivery
+    // row below carries the real event type. A real type with an empty
+    // payload here would be picked up by apps/reporting as a malformed event.
+    `INSERT INTO outbox_events (event_type, aggregate_type, aggregate_id, payload, processed_at)
+     VALUES ('webhooks.test.archive_fixture', 'transaction', $1, '{}'::jsonb, now()) RETURNING id`,
+    [randomUUID()],
   );
   const outboxEventId = outbox.rows[0]!.id;
 
