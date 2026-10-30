@@ -469,3 +469,30 @@ test("a KYC document with an Arabic file name can be downloaded", async () => {
   assert.equal(res.statusCode, 200, res.body);
   assert.ok(String(res.headers["content-disposition"]).includes("filename*=UTF-8''"));
 });
+
+test("a KYC upload with more than one file is refused", async () => {
+  const { merchantId, cookie } = await signupLoginAndVerify("kyctwofiles");
+  const pdf = Buffer.from("%PDF-1.4\n%mock\n%%EOF");
+  const boundary = `----filspayTwoFiles${randomUUID().replace(/-/g, "")}`;
+  const part = (name: string) =>
+    Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\nContent-Type: application/pdf\r\n\r\n`),
+      pdf,
+      Buffer.from("\r\n"),
+    ]);
+  const body = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="documentType"\r\n\r\nowner_id\r\n`),
+    part("a.pdf"),
+    part("b.pdf"),
+    Buffer.from(`--${boundary}--\r\n`),
+  ]);
+  const res = await app.inject({
+    method: "POST",
+    url: `/v1/merchants/${merchantId}/kyc/documents`,
+    headers: { cookie, "content-type": `multipart/form-data; boundary=${boundary}` },
+    payload: body,
+  });
+  assert.ok(res.statusCode >= 400 && res.statusCode < 500, `expected a 4xx, got ${res.statusCode} ${res.body}`);
+  const docs = await app.inject({ method: "GET", url: `/v1/merchants/${merchantId}/kyc/documents`, headers: { cookie } });
+  assert.equal((docs.json() as unknown[]).length, 0);
+});

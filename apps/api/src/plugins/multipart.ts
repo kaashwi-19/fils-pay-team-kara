@@ -10,7 +10,9 @@ export interface MultipartPluginOptions {
 /** Registers @fastify/multipart size-limited to `config.kycMaxFileSizeBytes`
  *  — oversized uploads are rejected by the plugin before any handler runs,
  *  never buffered in full. */
-// MK: fileSize limit only — files count is unlimited. one file per request is enforced in routes/kyc.ts
+// The note here said routes/kyc.ts enforces one file per request; it doesn't
+// (it buffered every file part and kept the last). It does now: a second
+// file part is refused with 400 before it is read.
 export const multipartPlugin = fp<MultipartPluginOptions>(async (app: FastifyInstance, opts): Promise<void> => {
   await app.register(multipart, {
     limits: { fileSize: opts.config.kycMaxFileSizeBytes },
