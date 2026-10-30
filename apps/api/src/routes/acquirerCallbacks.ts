@@ -55,12 +55,13 @@ export async function acquirerCallbackRoutes(app: FastifyInstance): Promise<void
       body.type !== "fraud_review.completed" ||
       !body.transactionId ||
       !body.occurredAt ||
-      !body.outcome ||
-      !body.note
+      (body.outcome !== "cleared" && body.outcome !== "confirmed_fraud") ||
+      !body.note ||
+      Number.isNaN(new Date(body.occurredAt).getTime())
     ) {
       throw new BadRequestError(
         "invalid_request",
-        "callbackId, type, transactionId, occurredAt, outcome, and note are required",
+        "callbackId, type, transactionId, occurredAt (a date), outcome ('cleared' or 'confirmed_fraud'), and note are required",
       );
     }
 

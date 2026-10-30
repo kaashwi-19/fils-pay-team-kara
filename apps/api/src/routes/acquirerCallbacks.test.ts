@@ -165,3 +165,17 @@ test("POST /v1/acquirer/callbacks returns 404 for an unknown transaction id", as
   assert.equal(res.statusCode, 404);
   assert.equal(res.json().error, "transaction_not_found");
 });
+
+test("POST /v1/acquirer/callbacks refuses an outcome other than cleared/confirmed_fraud", async () => {
+  const transactionId = await createTransaction();
+  const callbackId = `cb_${randomUUID()}`;
+  const body = { ...callbackBody(transactionId, callbackId), outcome: "approved_by_acquirer" };
+  const res = await app.inject({
+    method: "POST",
+    url: "/v1/acquirer/callbacks",
+    headers: { "acquirer-callback-signature": signatureHeader(body) },
+    payload: body,
+  });
+  assert.equal(res.statusCode, 400, res.body);
+  assert.equal(await noteCount(callbackId), "0");
+});
