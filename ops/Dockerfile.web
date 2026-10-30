@@ -1,4 +1,5 @@
-# The merchant dashboard (apps/web), built once and served by nginx on port 80.
+# The merchant dashboard + checkout (apps/web, port 80) and the admin console
+# (apps/admin, port 8080), built once and served by nginx.
 # nginx also forwards /v1 and /healthz to the api container, so the browser
 # talks to ONE origin: session cookies just work and no CORS is needed.
 FROM node:20-bookworm AS build
@@ -13,9 +14,12 @@ COPY apps/admin/package.json apps/admin/
 RUN npm ci --no-audit --no-fund
 COPY . .
 # Empty base URL = same origin as the page (nginx proxies /v1 to the api).
+ARG PUBLIC_BASE_URL=http://localhost
 RUN VITE_API_BASE_URL= npm run build -w apps/web
+RUN VITE_ADMIN_API_BASE_URL= VITE_WEB_BASE_URL=$PUBLIC_BASE_URL npm run build -w apps/admin
 
 FROM nginx:1.27-alpine
 COPY ops/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
-EXPOSE 80
+COPY --from=build /app/apps/admin/dist /usr/share/nginx/admin
+EXPOSE 80 8080

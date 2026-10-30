@@ -118,9 +118,12 @@ services:
     build:
       context: ..
       dockerfile: ops/Dockerfile.web
+      args:
+        PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost}
     restart: unless-stopped
     ports:
       - "80:80"
+      - "8080:8080"
     depends_on:
       - api
 

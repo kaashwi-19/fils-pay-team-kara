@@ -55,6 +55,7 @@ for i in $(seq 1 30); do
     IP=$(curl -fsS https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
     echo "   API is up:        http://$IP:3000/healthz"
     echo "   Dashboard website: http://$IP/"
+    echo "   Admin console:     http://$IP:8080/"
     $SUDO docker compose -f ops/docker-compose.yml ps
     exit 0
   fi
