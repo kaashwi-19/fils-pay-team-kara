@@ -169,3 +169,39 @@ test("runConsumerPass: atomicity — an apply failure partway through a multi-ev
   const cursorFinal = await getCursor();
   assert.ok(cursorFinal >= goodEvent.id, "watermark now past the previously-blocked good event");
 });
+
+test("runConsumerPass: an event that commits AFTER a higher-id event was consumed is still applied", async () => {
+  const merchantId = await createMerchant("commit-order");
+  // Drain anything already pending so this test's passes are about its own events.
+  while ((await runConsumerPass(pool, config)).processedCount > 0) {
+    /* keep draining */
+  }
+
+  // Transaction A takes the LOWER id but stays open...
+  const slow = await pool.connect();
+  await slow.query("BEGIN");
+  await slow.query(
+    `INSERT INTO outbox_events (event_type, aggregate_type, aggregate_id, payload)
+     VALUES ('transaction.voided', 'transaction', $1, $2)`,
+    [randomUUID(), JSON.stringify({ merchantId })],
+  );
+  // ...while B takes a HIGHER id and commits first.
+  await enqueueEvent(pool, {
+    eventType: "transaction.voided",
+    aggregateType: "transaction",
+    aggregateId: randomUUID(),
+    payload: { merchantId },
+  });
+  await runConsumerPass(pool, config); // must not move the watermark past A's event
+  await slow.query("COMMIT");
+  slow.release();
+  while ((await runConsumerPass(pool, config)).processedCount > 0) {
+    /* drain */
+  }
+
+  const result = await pool.query<{ voided_count: number }>(
+    `SELECT voided_count FROM merchant_daily_volume WHERE merchant_id = $1`,
+    [merchantId],
+  );
+  assert.equal(result.rows[0]?.voided_count, 2, "both voids counted, including the one that committed late");
+});
