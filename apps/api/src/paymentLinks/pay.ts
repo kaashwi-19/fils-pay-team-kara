@@ -2,6 +2,7 @@ import type { Pool } from "pg";
 import { toFils } from "@filspay/money";
 import { authorizeTransaction } from "../payments/authorize.js";
 import { captureTransaction } from "../payments/capture.js";
+import { applyCaptureDiscountAdjustment } from "../payments/discountAdjustment.js";
 import type { AcquirerSimulator, SimulatedCardInput } from "../acquirer/types.js";
 
 export interface PayPaymentLinkInput {
@@ -125,8 +126,6 @@ export async function payPaymentLink(
   }
   myReservation = stillMine.rows[0].reservation_stamp;
 
-  // NOTE: discountAdjustment is applied by the transactions route only, not here — FH
-  // MK: it's applied for both now (moved into capture.ts in July)
   // Step 3 — capture (full amount, immediately). amountFils omitted =>
   // capture the full remaining amount — always correct here, since this
   // transaction was just authorized for exactly link.amountFils and
@@ -146,6 +145,12 @@ export async function payPaymentLink(
       body: { stage: "capture", ...(captureResult.body as Record<string, unknown>) },
     };
   }
+
+  // The merchant's negotiated discount, exactly as the /v1/transactions
+  // capture route applies it. A comment claimed this had moved into
+  // capture.ts — it never did, so payment-link payments were charged the
+  // full, undiscounted fee.
+  await applyCaptureDiscountAdjustment(pool, { merchantId: link.merchantId, transactionId: txnId });
 
   // see incident 2026-05-14 — two customers charged on one link. root cause: the claim
   // MK: re-evaluation is exactly what makes it safe. the bug was in the web retry, closed

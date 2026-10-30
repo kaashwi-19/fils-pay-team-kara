@@ -358,3 +358,17 @@ test(
     assert.equal(finalLink.rows[0]!.transaction_id, txnId);
   },
 );
+
+test("a payment-link payment gets the merchant's negotiated discount, same as a direct capture", async () => {
+  const { merchantId, rawKey } = await createApprovedMerchantWithApiKey("plink-discount");
+  await pool.query(`UPDATE merchants SET negotiated_discount_bps = 2000 WHERE id = $1`, [merchantId]);
+  const link = await createLink(rawKey, merchantId, { amountFils: 10_000 });
+  const res = await pay(link.token, APPROVED_CARD);
+  assert.equal(res.statusCode, 200, res.body);
+  const txnId = (res.json() as { transactionId: string }).transactionId;
+  const adj = await pool.query(
+    `SELECT 1 FROM ledger_entries WHERE transaction_id = $1 AND description = 'capture: negotiated discount adjustment'`,
+    [txnId],
+  );
+  assert.ok((adj.rowCount ?? 0) > 0, "the discount adjustment must be posted for payment-link captures");
+});
