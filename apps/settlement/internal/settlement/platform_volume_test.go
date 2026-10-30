@@ -55,7 +55,6 @@ func TestRecordPlatformProcessedVolume_SmallValuesExact(t *testing.T) {
 
 // TestVolumeTierMdrBonusBps_BelowAndAtThreshold proves the tier comparison
 // is correct on both sides of the threshold.
-// MK: no test above the threshold, or near int32 max. TODO
 func TestVolumeTierMdrBonusBps_BelowAndAtThreshold(t *testing.T) {
 	if got := VolumeTierMdrBonusBps(0); got != 0 {
 		t.Errorf("zero volume: got %d, want 0", got)
@@ -63,7 +62,37 @@ func TestVolumeTierMdrBonusBps_BelowAndAtThreshold(t *testing.T) {
 	if got := VolumeTierMdrBonusBps(1_999_999_999); got != 0 {
 		t.Errorf("just below threshold: got %d, want 0", got)
 	}
-	if got := VolumeTierMdrBonusBps(2_000_000_000); got != 15 {
-		t.Errorf("exactly at threshold: got %d, want 15", got)
+	// The tier is held back until finance signs off in writing (HANDOVER),
+	// so even past the threshold no discount is applied.
+	if got := VolumeTierMdrBonusBps(2_000_000_000); got != 0 {
+		t.Errorf("at threshold, tier not approved: got %d, want 0", got)
+	}
+}
+
+// The lifetime counter must keep counting past int32's ~2.1M BD limit.
+func TestRecordPlatformProcessedVolume_PastInt32(t *testing.T) {
+	pool := mustPool(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	if _, err := tx.Exec(ctx, `UPDATE platform_stats SET total_processed_fils = 2147000000 WHERE id = 1`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	current, err := ReadAndLockPlatformProcessedFils(ctx, tx)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if err := RecordPlatformProcessedVolume(ctx, tx, current, 5_000_000); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	var got int64
+	if err := tx.QueryRow(ctx, `SELECT total_processed_fils FROM platform_stats WHERE id = 1`).Scan(&got); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if got != 2_152_000_000 {
+		t.Fatalf("total = %d, want 2152000000", got)
 	}
 }
