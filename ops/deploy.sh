@@ -41,7 +41,10 @@ if ! grep -q '^PUBLIC_BASE_URL=' ops/.env; then
 fi
 
 echo "==> 4/6 Build and start (database, migrations, api, settlement, reporting, dashboard website)"
-$SUDO docker compose -f ops/docker-compose.yml up -d --build
+$SUDO docker compose -f ops/docker-compose.yml up -d --build postgres migrate api settlement reporting
+# The website is started separately so a problem building it can never stop
+# the API itself from updating.
+$SUDO docker compose -f ops/docker-compose.yml up -d --build web || echo "   WARNING: the dashboard website did not start; the API is still up"
 
 echo "==> 5/6 Demo data (only if the database is empty; the seed refuses otherwise)"
 $SUDO docker compose -f ops/docker-compose.yml --profile seed run --rm seed || echo "   (skipped: database already has data)"
