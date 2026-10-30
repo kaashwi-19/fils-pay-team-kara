@@ -388,3 +388,13 @@ test("API key issuance shows the raw key exactly once; a subsequent list never e
   assert.equal("rawKey" in (listBody[0] ?? {}), false);
   assert.equal("keyHash" in (listBody[0] ?? {}), false);
 });
+
+test("signup refuses a trivially short password", async () => {
+  const res = await app.inject({
+    method: "POST",
+    url: "/v1/merchants",
+    payload: { businessProfile: businessProfilePayload("weakpw"), owner: { email: uniqueEmail("weakpw"), password: "1" } },
+  });
+  assert.equal(res.statusCode, 400, res.body);
+  assert.equal(res.json().error, "weak_password");
+});
