@@ -517,6 +517,39 @@ test("bulk approve KYC flips every selected pending merchant and writes one audi
   assert.equal(metadata.notes, "queue ticket #4821");
 });
 
+test("bulk approve KYC skips rejected and never-submitted merchants and writes a review row per approval", async () => {
+  const finance = await signedInAdmin("finance", "bulkkyc-skip");
+  const pending = await createMerchant("bulkkyc-pending");
+  const rejected = await createMerchant("bulkkyc-rejected");
+  const fresh = await createMerchant("bulkkyc-fresh");
+  await pool.query(`UPDATE merchants SET onboarding_status = 'under_review' WHERE id = $1`, [pending.merchantId]);
+  await pool.query(`UPDATE merchants SET onboarding_status = 'rejected' WHERE id = $1`, [rejected.merchantId]);
+
+  const res = await app.inject({
+    method: "POST",
+    url: "/v1/admin/merchants/bulk-approve",
+    headers: { cookie: finance.cookie },
+    payload: { merchantIds: [pending.merchantId, rejected.merchantId, fresh.merchantId] },
+  });
+  assert.equal(res.statusCode, 200, res.body);
+  assert.deepEqual((res.json() as { approvedMerchantIds: string[] }).approvedMerchantIds, [pending.merchantId]);
+
+  const statuses = await pool.query<{ id: string; onboarding_status: string; kyc_passed: boolean }>(
+    `SELECT id, onboarding_status, kyc_passed FROM merchants WHERE id = ANY($1)`,
+    [[rejected.merchantId, fresh.merchantId]],
+  );
+  for (const row of statuses.rows) {
+    assert.equal(row.kyc_passed, false, "a rejected or never-submitted merchant must not be approved in bulk");
+    assert.notEqual(row.onboarding_status, "approved");
+  }
+  const reviews = await pool.query(
+    `SELECT reviewer_admin_user_id FROM merchant_kyc_reviews WHERE merchant_id = $1 AND outcome = 'approved'`,
+    [pending.merchantId],
+  );
+  assert.equal(reviews.rowCount, 1, "each bulk approval is recorded in merchant_kyc_reviews");
+  assert.equal(reviews.rows[0].reviewer_admin_user_id, finance.id);
+});
+
 test("bulk approve KYC is finance-gated and rejects malformed selections", async () => {
   const support = await signedInAdmin("support", "bulkkyc-role");
   const { merchantId } = await createMerchant("bulkkyc-role");
@@ -1659,6 +1692,30 @@ test("recomputing transaction statuses never takes a test-mode merchant live", a
   assert.equal(res.statusCode, 200, res.body);
   const row = await pool.query<{ test_mode: boolean }>(`SELECT test_mode FROM merchants WHERE id = $1`, [merchantId]);
   assert.equal(row.rows[0]!.test_mode, true, "a sandbox merchant must stay out of real settlement");
+});
+
+test("recomputing transaction statuses leaves a chargeback as a chargeback and counts open authorizations", async () => {
+  const finance = await signedInAdmin("finance", "recompute-cb");
+  const { merchantId } = await createMerchant("recompute-cb");
+  const cb = await pool.query<{ id: string }>(
+    `INSERT INTO transactions (merchant_id, status, amount_fils, captured_fils, acquirer_reference)
+     VALUES ($1, 'chargeback', 1000, 1000, $2) RETURNING id`,
+    [merchantId, `acq-${randomUUID()}`],
+  );
+  await pool.query(
+    `INSERT INTO transactions (merchant_id, status, amount_fils, captured_fils, acquirer_reference)
+     VALUES ($1, 'authorized', 500, 0, $2)`,
+    [merchantId, `acq-${randomUUID()}`],
+  );
+  const res = await app.inject({
+    method: "POST",
+    url: `/v1/admin/merchants/${merchantId}/transactions/recompute-statuses`,
+    headers: { cookie: finance.cookie },
+  });
+  assert.equal(res.statusCode, 200, res.body);
+  assert.equal((res.json() as { openAuthorizations: number }).openAuthorizations, 1);
+  const row = await pool.query<{ status: string }>(`SELECT status FROM transactions WHERE id = $1`, [cb.rows[0]!.id]);
+  assert.equal(row.rows[0]!.status, "chargeback", "a recompute must not quietly undo a chargeback");
 });
 
 test("a super_admin's impersonation grant is read-only too, and dies when the admin is disabled", async () => {

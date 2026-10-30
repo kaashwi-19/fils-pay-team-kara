@@ -26,13 +26,21 @@ export async function recomputeTransactionStatusesForMerchant(
   const candidates = await client.query<CandidateRow>(
     `SELECT id, status, amount_fils, captured_fils, refunded_fils
        FROM transactions
-      WHERE merchant_id = $1 AND status NOT IN ('authorized', 'voided')
+      WHERE merchant_id = $1
+        AND status IN ('captured', 'partially_captured', 'partially_refunded', 'refunded')
       FOR UPDATE`,
     [merchantId],
   );
 
   let updated = 0;
-  let openAuthorizations = 0;
+  // Only the capture/refund statuses are derived from the amounts. A
+  // 'chargeback' (or authorized/voided) row is a lifecycle state the amounts
+  // can't express, so it is left alone instead of being reset to 'captured'.
+  const open = await client.query<{ n: string }>(
+    `SELECT count(*) AS n FROM transactions WHERE merchant_id = $1 AND status = 'authorized'`,
+    [merchantId],
+  );
+  const openAuthorizations = Number(open.rows[0]!.n);
 
   for (const row of candidates.rows) {
     const next = nextStatusAfterRefund({
@@ -44,7 +52,6 @@ export async function recomputeTransactionStatusesForMerchant(
       await client.query(`UPDATE transactions SET status = $2 WHERE id = $1`, [row.id, next]);
       updated += 1;
     }
-    if (row.status === "authorized") openAuthorizations += 1;
   }
 
   return { merchantId, scanned: candidates.rows.length, updated, openAuthorizations };
