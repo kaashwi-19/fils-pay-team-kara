@@ -130,3 +130,34 @@ func TestEffectiveMdrBpsAt_SeededScheduleFixture(t *testing.T) {
 		t.Errorf("after the cutover: EffectiveMdrBpsAt = %d, want 165", got)
 	}
 }
+
+// A same-instant correction must win at batch close exactly as it does at
+// capture (feeSchedule.ts orders by effective_from DESC, created_at DESC).
+func TestLoadFeeSchedules_SameInstantCorrectionWins(t *testing.T) {
+	pool := mustPool(t)
+	ctx := context.Background()
+	merchantID := insertActiveMerchant(t, pool, 250)
+	at := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	// Correction (210) is inserted FIRST physically but created LATER.
+	for _, r := range []struct {
+		bps     int64
+		created time.Time
+	}{{210, at.Add(48 * time.Hour)}, {225, at}} {
+		if _, err := pool.Exec(ctx, `INSERT INTO fee_schedules (merchant_id, mdr_bps, effective_from, created_at) VALUES ($1, $2, $3, $4)`,
+			merchantID, r.bps, at, r.created); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	schedules, err := LoadFeeSchedules(ctx, tx, merchantID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := EffectiveMdrBpsAt(schedules, at.Add(time.Hour), 250); got != 210 {
+		t.Fatalf("rate = %d, want 210 (the later-entered correction)", got)
+	}
+}

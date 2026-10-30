@@ -29,8 +29,13 @@ func LoadFeeSchedules(ctx context.Context, tx pgx.Tx, merchantID uuid.UUID) ([]F
 	rows, err := tx.Query(ctx, `
 		SELECT effective_from, mdr_bps FROM fee_schedules
 		 WHERE merchant_id = $1
-		 ORDER BY effective_from ASC
+		 ORDER BY effective_from ASC, created_at ASC
 	`, merchantID)
+	// created_at breaks ties exactly like apps/api/src/fees/feeSchedule.ts
+	// (effective_from DESC, created_at DESC): a same-day correction wins on
+	// both sides. Without it, two rows with the same effective_from came back
+	// in arbitrary order, so batch close could charge a different rate from
+	// the one capture charged.
 	if err != nil {
 		return nil, err
 	}
