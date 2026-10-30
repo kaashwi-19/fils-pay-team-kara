@@ -430,3 +430,23 @@ test("POST /v1/refunds: Idempotency-Key header is required", async () => {
   });
   assert.equal(res.statusCode, 400, res.body);
 });
+
+test("bad input is a 400, never a 500: invalid amounts and non-UUID ids", async () => {
+  const { rawKey } = await createApprovedMerchantWithApiKey("bad-input");
+  for (const amountFils of [-100, 0, 12.5, "100"]) {
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/transactions",
+      headers: { ...authHeader(rawKey), "idempotency-key": randomUUID() },
+      payload: { amountFils, card: VALID_CARD },
+    });
+    assert.equal(res.statusCode, 400, `amountFils=${JSON.stringify(amountFils)}: ${res.body}`);
+  }
+  const res = await app.inject({
+    method: "POST",
+    url: "/v1/transactions/not-a-uuid/capture",
+    headers: { ...authHeader(rawKey), "idempotency-key": randomUUID() },
+    payload: {},
+  });
+  assert.ok(res.statusCode === 400 || res.statusCode === 404, `non-UUID id: ${res.statusCode} ${res.body}`);
+});

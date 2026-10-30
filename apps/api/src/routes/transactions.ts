@@ -73,6 +73,12 @@ export async function transactionRoutes(app: FastifyInstance): Promise<void> {
       if (amountFils === undefined || !card) {
         throw new BadRequestError("invalid_request", "amountFils and card are required");
       }
+      // A negative, fractional or non-numeric amount used to reach toFils()
+      // and come back as a 500; zero created an authorization nothing can
+      // ever be captured from.
+      if (typeof amountFils !== "number" || !Number.isSafeInteger(amountFils) || amountFils <= 0) {
+        throw new BadRequestError("invalid_amount", "amountFils must be a positive whole number of fils");
+      }
 
       const input: AuthorizeInput = {
         merchantId: request.apiKeyAuth!.merchantId,

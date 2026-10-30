@@ -31,6 +31,13 @@ export function errorHandler(
     return;
   }
 
+  // Postgres "invalid input syntax" (22P02) — e.g. a transaction id that
+  // isn't a UUID in the URL — is the caller's mistake, not a server crash.
+  // These used to surface as 500 internal_error.
+  if ((err as { code?: string }).code === "22P02") {
+    reply.code(400).send({ error: "invalid_request", message: "a parameter has an invalid format" });
+    return;
+  }
   request.log.error({ err, occurredOn: formatIsoDate(new Date()) }, "unhandled error");
   reply.code(500).send({ error: "internal_error" });
 }
