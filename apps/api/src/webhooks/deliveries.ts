@@ -113,8 +113,10 @@ export interface ListWebhookDeliveriesResult {
  * calling this, returning 404 rather than a confusingly-empty 200 for a
  * nonexistent/foreign endpoint.
  */
-// the deliveries page memory leak is because this returns the full payload per row — am
-// FH: toSummary doesn't include payload afaict. leak still unexplained
+// The deliveries page's memory spike: toSummary drops payload and signature,
+// but the query still fetched them (`wd.*`) for up to MAX_LIMIT rows per
+// page, so every list call pulled every full JSON payload into memory just to
+// throw it away. Only the summary columns are selected now.
 export async function listWebhookDeliveries(
   pool: Pool,
   filters: ListWebhookDeliveriesFilters,
@@ -124,7 +126,10 @@ export async function listWebhookDeliveries(
   const decodedCursor = decodeCursor(filters.cursor);
 
   const result = await pool.query<DeliveryRow & { created_at_text: string }>(
-    `SELECT wd.*, wd.created_at::text AS created_at_text FROM webhook_deliveries wd
+    `SELECT wd.id, wd.outbox_event_id, wd.event_type, wd.delivery_event_id, wd.attempt_count, wd.status,
+            wd.response_status_code, wd.response_body_excerpt, wd.next_attempt_at, wd.last_attempted_at,
+            wd.replay_of_delivery_id, wd.created_at, wd.created_at::text AS created_at_text
+       FROM webhook_deliveries wd
        JOIN webhook_endpoints we ON we.id = wd.endpoint_id
       WHERE wd.endpoint_id = $1 AND we.merchant_id = $2
         AND ($3::text[] IS NULL OR wd.status = ANY($3))
