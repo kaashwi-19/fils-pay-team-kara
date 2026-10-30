@@ -28,6 +28,26 @@ export interface WebhookTransportResponse {
 
 export type WebhookTransport = (req: WebhookTransportRequest) => Promise<WebhookTransportResponse>;
 
+const MAX_RESPONSE_BYTES = 8 * 1024;
+
+async function readBounded(response: Response, maxBytes: number): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done || !value) break;
+      chunks.push(value);
+      total += value.byteLength;
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return Buffer.concat(chunks).subarray(0, maxBytes).toString("utf8");
+}
+
 /** Real transport: Node's global fetch with an AbortController-driven
  *  timeout, used by index.ts's production wiring. */
 export function createFetchTransport(): WebhookTransport {
@@ -35,17 +55,19 @@ export function createFetchTransport(): WebhookTransport {
     const controller = new AbortController();
     const timeoutHandle = setTimeout(() => controller.abort(), req.timeoutMs);
     try {
-      // YA: create.ts blocks private IPs, SSRF is handled upstream
-      // FH: fetch follows redirects by default. claude: "set redirect: 'manual' to prevent SSRF via an open redirect"
+      // redirect: "manual" — a merchant endpoint answering 302 to an internal
+      // address (or plain http) used to be followed blindly: SSRF.
       const response = await fetch(req.url, {
         method: "POST",
         headers: req.headers,
         body: req.body,
         signal: controller.signal,
+        redirect: "manual",
       });
-      // unbounded read, a 1gb response would oom us? — am
-      // MK: timeoutMs bounds it. fine for now, revisit after Eid inshallah
-      const body = await response.text();
+      // Bounded read: only a 2,000-char excerpt is ever stored, and an
+      // endpoint streaming a huge (or endless) body could exhaust the API's
+      // memory — the timeout doesn't stop a fast multi-GB response.
+      const body = await readBounded(response, MAX_RESPONSE_BYTES);
       return { statusCode: response.status, body };
     } catch (err) {
       return {
