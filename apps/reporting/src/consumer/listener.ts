@@ -24,19 +24,33 @@ export function startReportingConsumer(pool: Pool, config: ReportingConfig): Rep
   let running = false;
   let stopped = false;
 
+  // A notification that arrives while a pass is running used to be dropped,
+  // and a pass reads at most consumerBatchLimit events, so a burst left a
+  // backlog that only drained 500 events per poll interval (15 s). Now a
+  // pass that was asked for again, or that filled its batch, runs again.
+  let rerun = false;
   const triggerPass = (): void => {
-    if (running || stopped) return;
+    if (stopped) return;
+    if (running) {
+      rerun = true;
+      return;
+    }
     running = true;
+    rerun = false;
     runConsumerPass(pool, config)
+      .then(({ processedCount }) => {
+        if (processedCount >= config.consumerBatchLimit) rerun = true;
+      })
       .catch((err: unknown) => {
-        // A thrown error from one pass must never crash the listener or the
-        // process — the next NOTIFY or poll tick simply tries again.
         console.error("[reporting/consumer] consumer pass failed", err);
+        rerun = false; // a failing pass waits for the next poll, not a tight loop
       })
       .finally(() => {
         running = false;
+        if (rerun) setImmediate(triggerPass);
       });
   };
+
 
   // MK: dedicated Client, not from the pool -- LISTEN needs a pinned connection. DO NOT TOUCH
   // incident 2026-05-14 (missed settlement close): root cause was this client silently losing LISTEN after a pg restart. -- FH
