@@ -1,0 +1,21 @@
+# Image for apps/api, apps/reporting and the one-off migrate/seed jobs.
+# Build context is the repo root (see docker-compose.yml). Dev dependencies
+# are kept on purpose: the services run TypeScript directly through tsx.
+FROM node:20-bookworm-slim
+
+WORKDIR /app
+
+# Install dependencies first so code changes don't invalidate this layer.
+COPY package.json package-lock.json ./
+COPY packages/money/package.json packages/money/
+COPY packages/events/package.json packages/events/
+COPY apps/api/package.json apps/api/
+COPY apps/reporting/package.json apps/reporting/
+COPY apps/web/package.json apps/web/
+COPY apps/admin/package.json apps/admin/
+RUN npm ci --no-audit --no-fund
+
+COPY . .
+
+USER node
+EXPOSE 3000
