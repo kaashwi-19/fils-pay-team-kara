@@ -6,7 +6,6 @@ import { decodeEncryptionKey, decryptSecret } from "./secretCrypto.js";
 import { signPayload } from "./sign.js";
 import { canonicalJson } from "../payments/idempotency.js";
 import { buildEnvelope } from "./envelope.js";
-import { recordPayoutDisbursementEffect } from "./payoutDisbursement.js";
 import { WEBHOOK_DELIVERY_ID_HEADER, WEBHOOK_SIGNATURE_HEADER } from "./headers.js";
 import type { WebhookTransport } from "./transport.js";
 
@@ -36,12 +35,11 @@ const NOTIFY_CHANNEL = "outbox_events_channel";
 
 type PreDeliveryEffect = (pool: Pool, payload: Record<string, unknown>) => Promise<void>;
 
-const PRE_DELIVERY_EFFECTS: Record<string, PreDeliveryEffect> = {
-  "settlement.paid": async (pool, payload) => {
-    const data = payload.data as { settlementBatchId: string; netPayoutFils: number };
-    await recordPayoutDisbursementEffect(pool, data.settlementBatchId, Number(data.netPayoutFils));
-  },
-};
+// The settlement.paid effect that lived here wrote a payout disbursement
+// instruction once per webhook ENDPOINT (two endpoints = two payouts; none =
+// no payout). Disbursements are now written once, inside the settlement
+// worker's PayoutBatch transaction (migration 0079). Webhooks only notify.
+const PRE_DELIVERY_EFFECTS: Record<string, PreDeliveryEffect> = {};
 
 export type DispatcherConfig = Pick<
   Config,

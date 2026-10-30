@@ -147,6 +147,16 @@ func PayoutSplitBatch(ctx context.Context, db *pgxpool.Pool, batchID uuid.UUID) 
 		return SplitPayoutResult{}, err
 	}
 
+	if netPayout > 0 {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO settlement_payout_disbursements (settlement_batch_id, amount_fils, disbursement_reference)
+			VALUES ($1, $2, 'disb_' || gen_random_uuid())
+			ON CONFLICT (settlement_batch_id) DO NOTHING
+		`, batchID, netPayout); err != nil {
+			return SplitPayoutResult{}, err
+		}
+	}
+
 	_, err = tx.Exec(ctx, `UPDATE settlement_batches SET status = 'paid', paid_at = now() WHERE id = $1`, batchID)
 	if err != nil {
 		return SplitPayoutResult{}, err

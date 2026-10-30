@@ -392,6 +392,9 @@ func PayoutBatch(ctx context.Context, db *pgxpool.Pool, batchID uuid.UUID) (Payo
 		if err != nil {
 			return PayoutResult{}, fmt.Errorf("settlement: PayoutBatch: post payout legs: %w", err)
 		}
+		if err := RecordPayoutDisbursement(ctx, tx, batchID, netPayout); err != nil {
+			return PayoutResult{}, fmt.Errorf("settlement: PayoutBatch: %w", err)
+		}
 	}
 
 	// Runs unconditionally, including for a zero-payout batch: adding zero
@@ -524,4 +527,23 @@ func RunDailyBatch(ctx context.Context, db *pgxpool.Pool, businessDate time.Time
 	}
 
 	return report, nil
+}
+
+// RecordPayoutDisbursement writes the payout-rail instruction for a paid
+// batch inside PayoutBatch's own transaction — exactly once per batch
+// (unique index, migration 0079), as 0057 always said it should be. It used
+// to be written by the API's webhook dispatcher once per webhook endpoint.
+func RecordPayoutDisbursement(ctx context.Context, tx pgx.Tx, batchID uuid.UUID, amountFils int64) error {
+	if amountFils <= 0 {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `
+		INSERT INTO settlement_payout_disbursements (settlement_batch_id, amount_fils, disbursement_reference)
+		VALUES ($1, $2, 'disb_' || gen_random_uuid())
+		ON CONFLICT (settlement_batch_id) DO NOTHING
+	`, batchID, amountFils)
+	if err != nil {
+		return fmt.Errorf("record payout disbursement: %w", err)
+	}
+	return nil
 }

@@ -538,7 +538,7 @@ func TestCloseBatch_RefundsReduceNetPayout(t *testing.T) {
 	if result.NetPayoutFils != wantNet {
 		t.Errorf("NetPayoutFils = %d, want %d", result.NetPayoutFils, wantNet)
 	}
-	if got := countRows(t, pool, `SELECT 1 FROM refunds WHERE transaction_id = $1 AND settlement_batch_id = $2`, txnID, result.BatchID); got != 1 {
+	if got := countRows(t, pool, `SELECT count(*) FROM refunds WHERE transaction_id = $1 AND settlement_batch_id = $2`, txnID, result.BatchID); got != 1 {
 		t.Errorf("refund claimed by batch: got %d rows, want 1", got)
 	}
 }
@@ -560,5 +560,29 @@ func TestSchemeAmountBDMatchesTruncatedFils(t *testing.T) {
 		if got := SchemeAmountBD(gross); got != want {
 			t.Errorf("SchemeAmountBD(%d) = %s, want %s", gross, got, want)
 		}
+	}
+}
+
+// One payout instruction per paid batch, written by the payout itself — not
+// by the webhook dispatcher once per endpoint (0057/0079).
+func TestPayoutBatch_WritesExactlyOneDisbursement(t *testing.T) {
+	pool := mustPool(t)
+	ctx := context.Background()
+	const mdrBps = 250
+	merchantID := insertActiveMerchant(t, pool, mdrBps)
+	businessDate := time.Date(2026, 4, 9, 0, 0, 0, 0, time.UTC)
+	start, _ := BusinessDayWindow(businessDate)
+	insertCaptureEvent(t, pool, merchantID, mdrBps, 9000, start.Add(time.Hour))
+	closed, err := CloseBatch(ctx, pool, merchantID, businessDate)
+	if err != nil {
+		t.Fatalf("CloseBatch: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := PayoutBatch(ctx, pool, closed.BatchID); err != nil {
+			t.Fatalf("PayoutBatch: %v", err)
+		}
+	}
+	if got := countRows(t, pool, `SELECT count(*) FROM settlement_payout_disbursements WHERE settlement_batch_id = $1`, closed.BatchID); got != 1 {
+		t.Fatalf("disbursements = %d, want 1", got)
 	}
 }
