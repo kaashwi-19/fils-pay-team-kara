@@ -450,3 +450,12 @@ test("bad input is a 400, never a 500: invalid amounts and non-UUID ids", async 
   });
   assert.ok(res.statusCode === 400 || res.statusCode === 404, `non-UUID id: ${res.statusCode} ${res.body}`);
 });
+
+test("an authorization whose 7-day hold has expired cannot be captured", async () => {
+  const { rawKey } = await createApprovedMerchantWithApiKey("expired-auth", 250);
+  const txn = await authorize(rawKey, 3_000);
+  await pool.query(`UPDATE holds SET expires_at = now() - interval '1 minute' WHERE transaction_id = $1`, [txn.id]);
+  const res = await capture(rawKey, txn.id);
+  assert.equal(res.statusCode, 409, res.body);
+  assert.equal(res.json().error, "authorization_expired");
+});
