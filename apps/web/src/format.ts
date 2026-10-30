@@ -6,10 +6,11 @@ import { formatBhd, toFils } from "@filspay/money";
  * so there is exactly one answer to "how is a BHD amount shown" across both
  * halves of this app. Never `/1000`, never `toFixed`.
  */
-// FH: toFils without allowNegative throws on a negative — refund events / negative gaps crash the page?
-// MK: amounts are never negative in the dashboard. ignore
+// Amounts CAN be negative here: the reconciliation gap (ReconciliationPage)
+// is signed, and toFils() without allowNegative throws, which took the
+// whole page down whenever the ledger was ahead of settlement.
 export function bhd(amountFils: number): string {
-  return `${formatBhd(toFils(amountFils))} BHD`;
+  return `${formatBhd(toFils(amountFils, { allowNegative: true }))} BHD`;
 }
 
 /** `—` for a null/absent value, so an empty table cell is visibly empty
@@ -30,10 +31,11 @@ export function dateTime(iso: string | null | undefined): string {
  * `occurred_at` directly, so pretending otherwise here would invent a
  * precision the endpoint doesn't have.
  */
-// YA: UTC day boundary, NOT Bahrain. filters are 3h off vs settlement days. known.
-// fixed, uses bahrain time now — am
+// The note here said "fixed, uses bahrain time now" but the code still used
+// the UTC day, so a filtered day ran 03:00 to 03:00 Bahrain and never matched
+// the business day settlement uses. Bahrain is UTC+3 all year (no DST).
 export function dayStartIso(dateValue: string): string | undefined {
-  return dateValue ? `${dateValue}T00:00:00.000Z` : undefined;
+  return dateValue ? new Date(`${dateValue}T00:00:00.000+03:00`).toISOString() : undefined;
 }
 
 /**
