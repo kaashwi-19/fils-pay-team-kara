@@ -217,16 +217,33 @@ async function attemptOneDelivery(
 }
 
 /** Step B: attempt every currently-due 'pending' delivery, sequentially. */
-// MK: no SKIP LOCKED — only ever run ONE api replica until this changes
-// FH: staging ran 2 replicas since June, never saw a dup delivery, so it's fine
+//
+// Claim before sending. A plain SELECT let two API processes (staging ran two
+// replicas; index.ts even claims "SKIP LOCKED in the claim query makes
+// multiple replicas safe" — there was no such clause) pick the same due rows
+// and both POST them, so merchants got every webhook twice. Rows are now
+// leased atomically (FOR UPDATE SKIP LOCKED + pushing next_attempt_at out),
+// so each due delivery is attempted by exactly one process; the attempt's
+// own UPDATE then sets the real next_attempt_at / final status.
 async function attemptDueDeliveries(pool: Pool, transport: WebhookTransport, config: DispatcherConfig): Promise<number> {
   const dueResult = await pool.query<DueDeliveryRow>(
-    `SELECT wd.id, wd.endpoint_id, wd.event_type, wd.delivery_event_id, wd.payload, wd.attempt_count, we.url, we.secret_ciphertext
-       FROM webhook_deliveries wd
-       JOIN webhook_endpoints we ON we.id = wd.endpoint_id
-      WHERE wd.status = 'pending' AND wd.next_attempt_at <= now()
-      ORDER BY wd.next_attempt_at ASC
-      LIMIT $1`,
+    `WITH due AS (
+       SELECT wd.id
+         FROM webhook_deliveries wd
+        WHERE wd.status = 'pending' AND wd.next_attempt_at <= now()
+        ORDER BY wd.next_attempt_at ASC
+        LIMIT $1
+        FOR UPDATE SKIP LOCKED
+     ), leased AS (
+       UPDATE webhook_deliveries wd
+          SET next_attempt_at = now() + interval '2 minutes'
+         FROM due
+        WHERE wd.id = due.id
+       RETURNING wd.id, wd.endpoint_id, wd.event_type, wd.delivery_event_id, wd.payload, wd.attempt_count
+     )
+     SELECT leased.*, we.url, we.secret_ciphertext
+       FROM leased
+       JOIN webhook_endpoints we ON we.id = leased.endpoint_id`,
     [STEP_B_BATCH_LIMIT],
   );
 

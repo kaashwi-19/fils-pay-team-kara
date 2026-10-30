@@ -304,10 +304,13 @@ export async function getRecentLedgerActivity(
        FROM ledger_entries
       WHERE merchant_id = $1
         AND occurred_at >= ($2::date::timestamp AT TIME ZONE 'Asia/Bahrain')
-        AND occurred_at <  (($3::date + 1)::timestamp AT TIME ZONE 'Asia/Bahrain')
+        AND occurred_at <  ($3::date::timestamp AT TIME ZONE 'Asia/Bahrain')
       ORDER BY occurred_at DESC
       LIMIT 200`,
-    // Same Bahrain-date window as before, written as a plain range on
+    // `to` is EXCLUSIVE, like every other analytics endpoint (routes/analytics.ts
+    // parseDateRange; volumes use volume_date < to). The old BETWEEN included
+    // the whole `to` day, so this widget showed one day more than the charts.
+    // The window is written as a plain range on
     // occurred_at. Wrapping the column in AT TIME ZONE ... ::date stopped
     // Postgres using idx_ledger_entries_merchant_occurred, so every call read
     // the merchant's ENTIRE ledger — the "suspiciously slow" reporting query,

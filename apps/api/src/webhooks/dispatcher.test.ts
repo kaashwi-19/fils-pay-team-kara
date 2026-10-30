@@ -418,3 +418,28 @@ test("a disabled endpoint gets no delivery row for a new event", async () => {
   ]);
   assert.equal(rows.rows.length, 0);
 });
+
+test("two dispatchers running at once (two API replicas) send each delivery exactly once", async () => {
+  const merchantId = await createMerchant("two-replicas");
+  const endpointUrl = `http://fake-receiver.test/webhook-${randomUUID()}`;
+  await createEndpoint(merchantId, endpointUrl);
+  for (let i = 0; i < 5; i++) await enqueueCaptured(merchantId);
+
+  let sends = 0;
+  const transport: WebhookTransport = async (req) => {
+    if (req.url === endpointUrl) {
+      sends++;
+      await new Promise((r) => setTimeout(r, 20)); // a slow receiver widens the race window
+    }
+    return { statusCode: 200, body: "ok" };
+  };
+  // Create the delivery rows first, then let two "replicas" attempt them at once.
+  await runDispatchPass(pool, async () => ({ statusCode: 500, body: "" }), config).catch(() => {});
+  await pool.query(
+    `UPDATE webhook_deliveries wd SET next_attempt_at = now(), status = 'pending'
+       FROM webhook_endpoints we WHERE we.id = wd.endpoint_id AND we.url = $1`,
+    [endpointUrl],
+  );
+  await Promise.all([runDispatchPass(pool, transport, config), runDispatchPass(pool, transport, config)]);
+  assert.equal(sends, 5, `each of the 5 deliveries must be sent once, got ${sends}`);
+});

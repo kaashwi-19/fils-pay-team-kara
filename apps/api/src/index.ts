@@ -26,8 +26,8 @@ async function main(): Promise<void> {
   // (see webhooks/dispatcher.ts): buildApp()'s whole value is that it
   // returns a non-listening instance every route test's app.inject(...)
   // uses with no live background LISTEN session or timer wanted.
-  // MK: one dispatcher per replica. SKIP LOCKED in the claim query makes multiple replicas safe
-  // am: we only run one replica anyway (512mb). fine
+  // One dispatcher per replica; the claim query in dispatcher.ts leases rows
+  // with FOR UPDATE SKIP LOCKED, so several replicas never send the same delivery.
   const dispatcher: WebhookDispatcherHandle = startWebhookDispatcher(pool, webhookTransport, config);
 
   let shuttingDown = false;
