@@ -14,6 +14,7 @@ import { enqueueEvent } from "@filspay/events";
 import { loadConfig } from "../config.js";
 import { createWebhookEndpoint } from "./create.js";
 import { backoffDelayMs, runDispatchPass } from "./dispatcher.js";
+import { createHmac } from "node:crypto";
 import { verifySignature } from "./sign.js";
 import { WEBHOOK_DELIVERY_ID_HEADER, WEBHOOK_SIGNATURE_HEADER } from "./headers.js";
 import type { WebhookTransport, WebhookTransportRequest } from "./transport.js";
@@ -171,6 +172,15 @@ test("one active endpoint, 2xx response: exact headers/body sent, delivery marke
   const verifyResult = verifySignature(body, req.headers[WEBHOOK_SIGNATURE_HEADER]!, endpoint.secret);
   assert.deepEqual(verifyResult, { valid: true });
 
+  // FP-248: a merchant verifying the way most webhook libraries do — HMAC
+  // over the raw bytes received — must get the same signature. (Re-parsing
+  // and canonicalizing, as verifySignature does above, hid the mismatch.)
+  const sigHeader = req.headers[WEBHOOK_SIGNATURE_HEADER]!;
+  const t = /t=(\d+)/.exec(sigHeader)![1];
+  const v1 = /v1=([0-9a-f]+)/.exec(sigHeader)![1];
+  const rawHmac = createHmac("sha256", endpoint.secret).update(`${t}.${req.body}`).digest("hex");
+  assert.equal(rawHmac, v1, "signature must cover the exact body bytes sent");
+
   const delivery = await getDelivery(String(outboxEvent.id), endpoint.id);
   assert.equal(delivery.status, "succeeded");
   assert.equal(delivery.attempt_count, 1);
@@ -192,7 +202,7 @@ test("failing endpoint: backoff/exhaustion sequence across repeated runDispatchP
   assert.equal(delivery.status, "pending");
   assert.equal(delivery.attempt_count, 1);
   assert.equal(delivery.response_status_code, 500);
-  const expectedDelay1 = backoffDelayMs(1, config);
+  const expectedDelay1 = backoffDelayMs(1, config, () => 0.5); // jitter pinned to its midpoint: ±10 % made this assert flaky
   assert.equal(expectedDelay1, 1000);
   const actualDelay1 = delivery.next_attempt_at.getTime() - Date.now();
   assert.ok(Math.abs(actualDelay1 - expectedDelay1) < 3000, `expected ~${expectedDelay1}ms, got ${actualDelay1}ms`);
@@ -212,7 +222,7 @@ test("failing endpoint: backoff/exhaustion sequence across repeated runDispatchP
   delivery = await getDelivery(String(outboxEvent.id), endpoint.id);
   assert.equal(delivery.status, "pending");
   assert.equal(delivery.attempt_count, 2);
-  const expectedDelay2 = backoffDelayMs(2, config);
+  const expectedDelay2 = backoffDelayMs(2, config, () => 0.5);
   assert.equal(expectedDelay2, 2000);
   const actualDelay2 = delivery.next_attempt_at.getTime() - Date.now();
   assert.ok(Math.abs(actualDelay2 - expectedDelay2) < 3000, `expected ~${expectedDelay2}ms, got ${actualDelay2}ms`);

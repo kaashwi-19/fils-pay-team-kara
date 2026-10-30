@@ -119,12 +119,9 @@ test("POST /v1/acquirer/callbacks rejects a tampered signature", async () => {
   assert.equal(await noteCount(callbackId), "0");
 });
 
-// dev-mode behaviour (empty secret). prod rejects — MK
-// am: the test app config sets a secret though? line ~40
-test("POST /v1/acquirer/callbacks accepts a callback sent without a signature header", async () => {
-  // Documents current behavior for the acquirer sandbox's pre-signing
-  // tooling: with no header there is nothing to verify, so the callback is
-  // processed rather than rejected.
+test("POST /v1/acquirer/callbacks rejects a callback sent without a signature header", async () => {
+  // Omitting the header used to skip verification entirely, so anyone could
+  // post fraud verdicts onto any transaction.
   const transactionId = await createTransaction();
   const callbackId = `acqcb_${randomUUID()}`;
 
@@ -134,8 +131,23 @@ test("POST /v1/acquirer/callbacks accepts a callback sent without a signature he
     payload: callbackBody(transactionId, callbackId),
   });
 
-  assert.equal(res.statusCode, 200);
-  assert.deepEqual(res.json(), { received: true });
+  assert.equal(res.statusCode, 401, res.body);
+  assert.equal(await noteCount(callbackId), "0");
+});
+
+test("POST /v1/acquirer/callbacks: a redelivered callback is recorded once (FP-201)", async () => {
+  const transactionId = await createTransaction();
+  const callbackId = `acqcb_${randomUUID()}`;
+  const body = callbackBody(transactionId, callbackId);
+  for (let i = 0; i < 3; i++) {
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/acquirer/callbacks",
+      headers: { "acquirer-callback-signature": signatureHeader(body) },
+      payload: body,
+    });
+    assert.equal(res.statusCode, 200, res.body);
+  }
   assert.equal(await noteCount(callbackId), "1");
 });
 

@@ -256,6 +256,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     webhookRequestTimeoutMs: parseIntEnv(env.WEBHOOK_REQUEST_TIMEOUT_MS, 10_000),
 
     acquirerCallbackSigningSecret,
-    acquirerCallbackRequireSignature: parseBoolEnv(env.ACQUIRER_CALLBACK_REQUIRE_SIGNATURE, false),
+    acquirerCallbackRequireSignature: parseBoolEnv(env.ACQUIRER_CALLBACK_REQUIRE_SIGNATURE, true),
   };
 }

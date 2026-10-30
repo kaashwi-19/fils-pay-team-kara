@@ -4,6 +4,7 @@ import type { Config } from "../config.js";
 import { withTransaction } from "../db/withTransaction.js";
 import { decodeEncryptionKey, decryptSecret } from "./secretCrypto.js";
 import { signPayload } from "./sign.js";
+import { canonicalJson } from "../payments/idempotency.js";
 import { buildEnvelope } from "./envelope.js";
 import { recordPayoutDisbursementEffect } from "./payoutDisbursement.js";
 import { WEBHOOK_DELIVERY_ID_HEADER, WEBHOOK_SIGNATURE_HEADER } from "./headers.js";
@@ -170,7 +171,10 @@ async function attemptOneDelivery(
       [WEBHOOK_DELIVERY_ID_HEADER]: row.delivery_event_id,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(row.payload),
+    // The exact bytes the signature covers (FP-248): signPayload signs
+    // canonicalJson(payload); sending JSON.stringify (different key order)
+    // made merchants' byte-level verification fail.
+    body: canonicalJson(row.payload),
     timeoutMs: config.webhookRequestTimeoutMs,
   });
 

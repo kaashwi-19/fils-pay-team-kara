@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { timingSafeEqualHex } from "../lib/crypto.js";
 
 /** Verifies the signature on an inbound acquirer callback. */
 
@@ -37,17 +38,25 @@ export interface VerifyAcquirerCallbackResult {
   reason?: VerifyAcquirerCallbackFailureReason;
 }
 
+// Buffer.compare is not constant-time; crypto.timingSafeEqual is.
 function constantTimeEquals(a: string, b: string): boolean {
-  return Buffer.from(a).length === Buffer.from(b).length &&
-    Buffer.compare(Buffer.from(a), Buffer.from(b)) === 0;
+  return /^[0-9a-f]+$/i.test(b) && timingSafeEqualHex(a, b);
 }
 
-/** Verifies the acquirer callback signature when present and required. */
+/**
+ * Verifies the acquirer callback signature over the EXACT raw request body.
+ * Re-serializing the parsed body (JSON.stringify) changes key order and
+ * whitespace whenever the acquirer's JSON isn't byte-identical to ours, so
+ * genuine callbacks were rejected (FP-248's "incoming check has its own
+ * problems"). A missing header is only accepted when signatures are
+ * explicitly switched off (ACQUIRER_CALLBACK_REQUIRE_SIGNATURE=false) —
+ * previously simply omitting the header skipped verification entirely.
+ */
 export function verifyAcquirerCallbackSignature(
-  payload: unknown,
+  rawBody: string,
   header: string | undefined,
   secret: string,
-  requireSignature = false,
+  requireSignature = true,
 ): VerifyAcquirerCallbackResult {
   if (!header) {
     return requireSignature
@@ -59,7 +68,7 @@ export function verifyAcquirerCallbackSignature(
   if (!parsed) return { valid: false, reason: "malformed_header" };
 
   const expected = createHmac("sha256", secret)
-    .update(`${parsed.timestamp}.${JSON.stringify(payload)}`)
+    .update(`${parsed.timestamp}.${rawBody}`)
     .digest("hex");
 
   if (!constantTimeEquals(expected, parsed.signature)) {
