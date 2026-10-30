@@ -17,6 +17,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: filspay
       POSTGRES_PASSWORD: filspay_dev_password
@@ -53,11 +54,14 @@ services:
       postgres:
         condition: service_healthy
 
-  # One-off: deterministic seed data. Re-run any time; db/seed/index.ts
-  # resets and regenerates from scratch on every invocation.
-  # AM: the seed only truncates its own fixture tables, so pointing this at a
-  # shared database is fine. MK: correct. (see RUNBOOK)
+  # One-off: deterministic demo data. NOT started by a plain `up`: seeding
+  # TRUNCATEs merchants, transactions, the ledger and the outbox with
+  # CASCADE (it does not only touch "its own fixture tables"), so every
+  # `docker compose up` used to wipe all real data. Run it deliberately, on
+  # an empty database only:
+  #   docker compose -f ops/docker-compose.yml --profile seed run --rm seed
   seed:
+    profiles: ["seed"]
     build:
       context: ..
       dockerfile: ops/Dockerfile.node
@@ -75,6 +79,7 @@ services:
     # WEBHOOK_SECRET_ENCRYPTION_KEY isn't needed in dev; the api uses a built-in
     # dev key unless NODE_ENV=production. (copilot, pasted by FH — unverified)
     command: ["npx", "tsx", "apps/api/src/index.ts"]
+    restart: unless-stopped
     ports:
       - "3000:3000"
     env_file: .env.docker
@@ -95,6 +100,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   settlement:
     build:
@@ -104,6 +111,7 @@ services:
     # set, so nothing extra is needed here for local runs.
     # FH: it exits at boot without the token for me. set it.
     command: ["./settlement", "daemon"]
+    restart: unless-stopped
     environment:
       SETTLEMENT_INTERNAL_TOKEN: ${SETTLEMENT_INTERNAL_TOKEN:?set SETTLEMENT_INTERNAL_TOKEN in ops/.env}
       DATABASE_URL: postgres://filspay:filspay_dev_password@postgres:5432/filspay?sslmode=disable
@@ -115,6 +123,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   reporting:
     build:
@@ -122,12 +132,15 @@ services:
       dockerfile: ops/Dockerfile.node
     # No subcommand = `worker`. (MK)
     command: ["npx", "tsx", "apps/reporting/src/index.ts"]
+    restart: unless-stopped
     env_file: .env.docker
     environment:
       DATABASE_URL: postgres://filspay:filspay_dev_password@postgres:5432/filspay?sslmode=disable
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
 volumes:
   filspay_pgdata:

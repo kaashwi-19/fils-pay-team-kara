@@ -30,6 +30,20 @@ async function main(): Promise<void> {
   const pool = new Pool({ connectionString: databaseUrl, max: 5 });
 
   try {
+    // generate() TRUNCATEs merchants, transactions, the ledger and the outbox
+    // (CASCADE reaches everything that references them). On a database that
+    // already holds data that is a wipe, so refuse unless explicitly told to.
+    const existing = await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM merchants`);
+    if (Number(existing.rows[0]?.n ?? 0) > 0 && process.env.SEED_RESET_EXISTING_DATA !== "yes") {
+      console.error(
+        `seed: refusing to run — the database already has ${existing.rows[0]?.n} merchant(s), and seeding ` +
+          "deletes ALL merchants, transactions, ledger entries and events. " +
+          "Set SEED_RESET_EXISTING_DATA=yes only if you really mean to wipe it.",
+      );
+      process.exitCode = 1;
+      return;
+    }
+
     const summary = await generate(pool);
     console.log(
       `seed: generated ${summary.merchantCount} merchants, ${summary.merchantUserCount} merchant_users, ` +
