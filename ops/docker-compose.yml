@@ -89,6 +89,17 @@ services:
       WEBHOOK_SECRET_ENCRYPTION_KEY: ${WEBHOOK_SECRET_ENCRYPTION_KEY:?set WEBHOOK_SECRET_ENCRYPTION_KEY in ops/.env}
       ACQUIRER_CALLBACK_SIGNING_SECRET: ${ACQUIRER_CALLBACK_SIGNING_SECRET:?set ACQUIRER_CALLBACK_SIGNING_SECRET in ops/.env}
       ACQUIRER_CALLBACK_REQUIRE_SIGNATURE: "true"
+      # The server is plain HTTP (no TLS certificate), and browsers drop a
+      # Secure cookie sent over HTTP, so the dashboard login would never
+      # stick. Turn this back on (or remove it) once HTTPS is in front.
+      COOKIE_SECURE: "false"
+      # There is no email/SMS provider on this server, so a one-time code
+      # would never reach anyone and nobody (us or the judges) could sign in
+      # to the dashboard. For this demo environment the login page shows the
+      # code instead. Remove this line as soon as a real OTP sender exists.
+      OTP_DEV_EXPOSE: "true"
+      # Payment-link URLs point at the dashboard's /pay page on this server.
+      CHECKOUT_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost}
       # One application role (filspay) owns the whole database in this
       # environment. Every service here, and the one-off migrate/seed jobs
       # above, authenticate as that same role, which keeps local
@@ -102,6 +113,16 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+
+  web:
+    build:
+      context: ..
+      dockerfile: ops/Dockerfile.web
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - api
 
   settlement:
     build:

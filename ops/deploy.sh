@@ -34,8 +34,13 @@ WEBHOOK_SECRET_ENCRYPTION_KEY=$(openssl rand -base64 32)
 ACQUIRER_CALLBACK_SIGNING_SECRET=$(openssl rand -hex 32)
 EOF
 fi
+# The address people use to reach this server (payment-link URLs use it).
+if ! grep -q '^PUBLIC_BASE_URL=' ops/.env; then
+  IP=$(curl -fsS https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
+  echo "PUBLIC_BASE_URL=http://$IP" >> ops/.env
+fi
 
-echo "==> 4/6 Build and start (database, migrations, api, settlement, reporting)"
+echo "==> 4/6 Build and start (database, migrations, api, settlement, reporting, dashboard website)"
 $SUDO docker compose -f ops/docker-compose.yml up -d --build
 
 echo "==> 5/6 Demo data (only if the database is empty; the seed refuses otherwise)"
@@ -44,7 +49,9 @@ $SUDO docker compose -f ops/docker-compose.yml --profile seed run --rm seed || e
 echo "==> 6/6 Health check"
 for i in $(seq 1 30); do
   if curl -fsS http://localhost:3000/healthz >/dev/null 2>&1; then
-    echo "   API is up: http://$(curl -fsS https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}'):3000/healthz"
+    IP=$(curl -fsS https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
+    echo "   API is up:        http://$IP:3000/healthz"
+    echo "   Dashboard website: http://$IP/"
     $SUDO docker compose -f ops/docker-compose.yml ps
     exit 0
   fi

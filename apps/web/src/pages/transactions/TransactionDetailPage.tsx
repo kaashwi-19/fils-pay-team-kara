@@ -9,6 +9,7 @@ import {
 import { ApiError, describeError } from "../../api/client.js";
 import { RequireRole } from "../../auth/RequireRole.js";
 import { bhd, dash, dateTime } from "../../format.js";
+import { RefundDrawer } from "./RefundDrawer.js";
 import type { TransactionDto, TransactionEventDto } from "../../types.js";
 
 type LoadState =
@@ -27,7 +28,6 @@ type LoadState =
  * this page does not undo that by guessing.
  */
 // MK: timeline renders refund events fine
-// FH: RefundDrawer import removed 2026-06 until the route exists
 export function TransactionDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [state, setState] = useState<LoadState>({ kind: "loading" });
@@ -151,6 +151,8 @@ export function TransactionDetailPage() {
         <dd>{bhd(txn.amountFils)}</dd>
         <dt>Captured amount</dt>
         <dd>{bhd(txn.capturedFils)}</dd>
+        <dt>Refunded amount</dt>
+        <dd>{bhd(txn.refundedFils)}</dd>
         <dt>Currency</dt>
         <dd>{txn.currency}</dd>
         <dt>Reference</dt>
@@ -165,12 +167,9 @@ export function TransactionDetailPage() {
         <dd>{dateTime(txn.createdAt)}</dd>
       </dl>
 
-      {/* Capture and void are hidden from `support` as a UX choice — a support
-          agent looks things up, they don't move money. Unlike the
-          reconciliation page, this hide is NOT backed by a matching
-          server-side role check: the API gates capture/void at "any
-          authenticated merchant actor". Do not mistake a hidden button here for a security
-          boundary. */}
+      {/* Capture, void and refund are hidden from `support`. The API enforces
+          the same rule server-side (owner/finance only), so this hide is a
+          convenience, not the security boundary. */}
       <RequireRole allow={["owner", "finance"]}>
         {capturable || voidable ? (
           <div className="dash-actions">
@@ -221,6 +220,8 @@ export function TransactionDetailPage() {
           </div>
         ) : null}
       </RequireRole>
+
+      <RefundDrawer txn={txn} onRefunded={load} />
 
       <h2>Event timeline</h2>
       <table className="dash-table">
