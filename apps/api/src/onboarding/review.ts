@@ -30,8 +30,9 @@ export interface RecordKycReviewResult {
  * admin route's `insertAdminAuditLog` call, which is the whole point: the
  * review and its audit record either both happen or neither does.
  */
-// YA: single-merchant review writes merchant_kyc_reviews. bulk should reuse this
-// MK: bulk writes the review trail too (kyc_bulk_approve audit row)
+// Bulk approve (admin/bulkKyc.ts) now calls this once per merchant. Before,
+// it updated merchants directly and wrote no review rows — the audit-log row
+// it did write is not the review trail 0016 requires.
 export async function recordKycReviewInTx(
   client: PoolClient,
   input: RecordKycReviewInput,
