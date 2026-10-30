@@ -216,13 +216,53 @@ func CloseBatch(ctx context.Context, db *pgxpool.Pool, merchantID uuid.UUID, bus
 		batchGross += grossForTxn
 		batchFee += feeForTxn
 	}
+	// Step 8b: refunds that happened in this business day (FP-212). Each
+	// refund gives money back to the cardholder and returns its share of
+	// the fee, so it reduces both what the merchant is paid and the fee.
+	// Claimed and locked exactly like capture events, so a refund lands in
+	// exactly one batch.
+	refundRows, err := tx.Query(ctx, `
+		SELECT id, amount_fils, fee_reversed_fils
+		  FROM refunds
+		 WHERE merchant_id = $1
+		   AND status = 'succeeded'
+		   AND settlement_batch_id IS NULL
+		   AND occurred_at >= $2 AND occurred_at < $3
+		 FOR UPDATE
+	`, merchantID, start, end)
+	if err != nil {
+		return BatchResult{}, fmt.Errorf("settlement: CloseBatch: select refunds: %w", err)
+	}
+	var refundIDs []uuid.UUID
+	var refundGross, refundFeeReversed money.Fils
+	for refundRows.Next() {
+		var id uuid.UUID
+		var amount, feeReversed int64
+		if err := refundRows.Scan(&id, &amount, &feeReversed); err != nil {
+			refundRows.Close()
+			return BatchResult{}, fmt.Errorf("settlement: CloseBatch: scan refund: %w", err)
+		}
+		refundIDs = append(refundIDs, id)
+		refundGross += money.Fils(amount)
+		refundFeeReversed += money.Fils(feeReversed)
+	}
+	if err := refundRows.Err(); err != nil {
+		return BatchResult{}, fmt.Errorf("settlement: CloseBatch: iterate refunds: %w", err)
+	}
+	refundRows.Close()
+
+	// Platform processed volume counts captures only; the batch's own
+	// figures are net of refunds.
+	capturedGross := batchGross
+	batchGross -= refundGross
+	batchFee -= refundFeeReversed
 	netPayout := NetPayableFils(batchGross, batchFee)
 
 	// Record this batch's contribution to the platform-wide lifetime
 	// processed-volume counter, in the same transaction that freezes this
 	// batch's own totals — so the counter and the batch it describes
 	// commit or roll back together.
-	if err := RecordPlatformProcessedVolume(ctx, tx, platformProcessedFils, int64(batchGross)); err != nil {
+	if err := RecordPlatformProcessedVolume(ctx, tx, platformProcessedFils, int64(capturedGross)); err != nil {
 		return BatchResult{}, fmt.Errorf("settlement: CloseBatch: record platform volume: %w", err)
 	}
 
@@ -244,6 +284,15 @@ func CloseBatch(ctx context.Context, db *pgxpool.Pool, merchantID uuid.UUID, bus
 		`, eventIDs, batchID)
 		if err != nil {
 			return BatchResult{}, fmt.Errorf("settlement: CloseBatch: mark events batched: %w", err)
+		}
+	}
+
+	if len(refundIDs) > 0 {
+		_, err = tx.Exec(ctx, `
+			UPDATE refunds SET settlement_batch_id = $2 WHERE id = ANY($1)
+		`, refundIDs, batchID)
+		if err != nil {
+			return BatchResult{}, fmt.Errorf("settlement: CloseBatch: mark refunds batched: %w", err)
 		}
 	}
 

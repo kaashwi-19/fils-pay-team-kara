@@ -77,7 +77,8 @@ func TestRecalculateMDR_RecomputesAtCurrentRate(t *testing.T) {
 		t.Errorf("DiffFils = %d, want %d", adj.DiffFils, wantFee-closed.FeeFils)
 	}
 
-	// net_payout_fils must move in lockstep with the new fee.
+	// A closed or paid batch is frozen: the fee difference is posted as a
+	// new ledger correction, and the batch keeps the figures it was paid at.
 	var gotFee, gotNet int64
 	err = pool.QueryRow(ctx, `
 		SELECT fee_fils, net_payout_fils FROM settlement_batches WHERE id = $1
@@ -85,11 +86,11 @@ func TestRecalculateMDR_RecomputesAtCurrentRate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read recalculated batch: %v", err)
 	}
-	if gotFee != int64(wantFee) {
-		t.Errorf("persisted fee_fils = %d, want %d", gotFee, wantFee)
+	if gotFee != int64(closed.FeeFils) {
+		t.Errorf("persisted fee_fils = %d, want unchanged %d", gotFee, closed.FeeFils)
 	}
-	if gotNet != int64(closed.GrossFils)-int64(wantFee) {
-		t.Errorf("persisted net_payout_fils = %d, want %d", gotNet, int64(closed.GrossFils)-int64(wantFee))
+	if gotNet != int64(closed.NetPayoutFils) {
+		t.Errorf("persisted net_payout_fils = %d, want unchanged %d", gotNet, closed.NetPayoutFils)
 	}
 }
 

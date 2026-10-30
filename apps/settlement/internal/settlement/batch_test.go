@@ -506,3 +506,48 @@ func TestCloseBatchNetPayoutIsWholeFils(t *testing.T) {
 		t.Errorf("stored net_payout_fils = %q, want %d (the figure CloseBatch returned)", storedText, result.NetPayoutFils)
 	}
 }
+
+// FP-212: a refund made during the business day reduces the merchant's net
+// payout by the refunded amount minus the fee share returned to them, and
+// is claimed by exactly one batch.
+func TestCloseBatch_RefundsReduceNetPayout(t *testing.T) {
+	pool := mustPool(t)
+	ctx := context.Background()
+	const mdrBps = 250
+	merchantID := insertActiveMerchant(t, pool, mdrBps)
+
+	businessDate := time.Date(2026, 4, 2, 0, 0, 0, 0, time.UTC)
+	start, _ := BusinessDayWindow(businessDate)
+	txnID, fee := insertCaptureEvent(t, pool, merchantID, mdrBps, 10000, start.Add(1*time.Hour))
+
+	const refundFils, feeReversed = 4000, 100
+	_, err := pool.Exec(ctx, `
+		INSERT INTO refunds (transaction_id, merchant_id, amount_fils, fee_reversed_fils, status,
+		                     acquirer_reference, reason, created_by_type, created_by_id, occurred_at)
+		VALUES ($1, $2, $3, $4, 'succeeded', 'acq-refund', 'test', 'merchant_api_key', $5, $6)
+	`, txnID, merchantID, refundFils, feeReversed, uuid.New(), start.Add(2*time.Hour))
+	if err != nil {
+		t.Fatalf("insert refund: %v", err)
+	}
+
+	result, err := CloseBatch(ctx, pool, merchantID, businessDate)
+	if err != nil {
+		t.Fatalf("CloseBatch: %v", err)
+	}
+	wantNet := money.Fils(10000-refundFils) - (fee - feeReversed)
+	if result.NetPayoutFils != wantNet {
+		t.Errorf("NetPayoutFils = %d, want %d", result.NetPayoutFils, wantNet)
+	}
+	if got := countRows(t, pool, `SELECT 1 FROM refunds WHERE transaction_id = $1 AND settlement_batch_id = $2`, txnID, result.BatchID); got != 1 {
+		t.Errorf("refund claimed by batch: got %d rows, want 1", got)
+	}
+}
+
+// ADR-0001: net payout is integer fils, exact even for very large batches
+// (the old float32 conversion lost fils above ~16,777 BD).
+func TestNetPayableFils_ExactForLargeAmounts(t *testing.T) {
+	gross, fee := money.Fils(135_000_123), money.Fils(3_037_503)
+	if got, want := NetPayableFils(gross, fee), money.Fils(131_962_620); got != want {
+		t.Errorf("NetPayableFils = %d, want %d", got, want)
+	}
+}

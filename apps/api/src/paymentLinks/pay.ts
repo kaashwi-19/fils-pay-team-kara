@@ -22,6 +22,7 @@ interface ClaimedLinkRow {
   merchant_id: string;
   amount_fils: string | number;
   reference: string | null;
+  reservation_stamp: string;
 }
 
 interface LinkStatusRow {
@@ -31,10 +32,8 @@ interface LinkStatusRow {
 
 /** A pay request is judged against when the buyer pressed pay, so a
  * retry that lands after midnight is not penalised. */
-export function expiryReferenceTime(submittedAt?: string): Date {
-  if (!submittedAt) return new Date();
-  const parsed = new Date(submittedAt);
-  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+export function expiryReferenceTime(_submittedAt?: string): Date {
+  return new Date();
 }
 
 /**
@@ -71,7 +70,7 @@ export async function payPaymentLink(
              OR (status = 'reserved' AND reserved_at < now() - ($2 || ' seconds')::interval)
             )
         AND expires_at > $3
-      RETURNING id, merchant_id, amount_fils, reference`,
+      RETURNING id, merchant_id, amount_fils, reference, reserved_at::text AS reservation_stamp`,
     [input.token, config.paymentLinkReservationTimeoutSeconds, expiryCheckTime],
   );
 
@@ -86,6 +85,7 @@ export async function payPaymentLink(
     amountFils: toFils(Number(claimedRow.amount_fils)),
     reference: claimedRow.reference,
   };
+  let myReservation = claimedRow.reservation_stamp;
 
   // Step 2 — authorize.
   // am: keys include link.id so two links can never collide on idempotency. good
@@ -102,7 +102,7 @@ export async function payPaymentLink(
   });
 
   if (authResult.statusCode !== 201) {
-    await releaseReservation(pool, link.id);
+    await releaseReservation(pool, link.id, myReservation);
     return {
       statusCode: authResult.statusCode,
       body: { stage: "authorize", ...(authResult.body as Record<string, unknown>) },
@@ -110,6 +110,20 @@ export async function payPaymentLink(
   }
 
   const txnId = (authResult.body as { id: string }).id;
+
+  // Before taking the money, confirm this request still holds the
+  // reservation (another request may have re-claimed it after the timeout)
+  // and refresh it so it cannot be re-claimed while we capture.
+  const stillMine = await pool.query<{ reservation_stamp: string }>(
+    `UPDATE payment_links SET reserved_at = now()
+      WHERE id = $1 AND status = 'reserved' AND reserved_at = $2::timestamptz
+      RETURNING reserved_at::text AS reservation_stamp`,
+    [link.id, myReservation],
+  );
+  if (!stillMine.rows[0]) {
+    return { statusCode: 409, body: { error: "payment_link_reserved" } };
+  }
+  myReservation = stillMine.rows[0].reservation_stamp;
 
   // NOTE: discountAdjustment is applied by the transactions route only, not here — FH
   // MK: it's applied for both now (moved into capture.ts in July)
@@ -126,7 +140,7 @@ export async function payPaymentLink(
   });
 
   if (captureResult.statusCode !== 200) {
-    await releaseReservation(pool, link.id);
+    await releaseReservation(pool, link.id, myReservation);
     return {
       statusCode: captureResult.statusCode,
       body: { stage: "capture", ...(captureResult.body as Record<string, unknown>) },
@@ -143,9 +157,9 @@ export async function payPaymentLink(
   }>(
     `UPDATE payment_links
         SET status = 'paid', paid_at = now(), transaction_id = $2, reserved_at = NULL
-      WHERE id = $1 AND status = 'reserved'
+      WHERE id = $1 AND status = 'reserved' AND reserved_at = $3::timestamptz
       RETURNING id, paid_at`,
-    [link.id, txnId],
+    [link.id, txnId, myReservation],
   );
 
   const finalized = finalizeResult.rows[0];
@@ -185,10 +199,12 @@ export async function payPaymentLink(
  * 'reserved'` for the same reason as the finalize UPDATE: this request
  * only ever releases the reservation it itself holds.
  */
-async function releaseReservation(pool: Pool, linkId: string): Promise<void> {
-  await pool.query(`UPDATE payment_links SET status = 'active', reserved_at = NULL WHERE id = $1 AND status = 'reserved'`, [
-    linkId,
-  ]);
+async function releaseReservation(pool: Pool, linkId: string, reservationStamp: string): Promise<void> {
+  await pool.query(
+    `UPDATE payment_links SET status = 'active', reserved_at = NULL
+      WHERE id = $1 AND status = 'reserved' AND reserved_at = $2::timestamptz`,
+    [linkId, reservationStamp],
+  );
 }
 
 /**

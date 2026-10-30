@@ -286,16 +286,147 @@ test("GET /v1/transactions/:id/events returns the timeline in chronological orde
   assert.equal(events[2]!.amountFils, 4_000);
 });
 
-// delete/replace this when FP-212 lands — am
-// MK: keep it until the route is behind the feature flag (REFUNDS_V2), then flip the assertion
-test("POST /v1/refunds returns 501 not_implemented", async () => {
-  const { rawKey } = await createApprovedMerchantWithApiKey("refund-stub");
+async function refund(
+  rawKey: string,
+  body: Record<string, unknown>,
+  opts: { url?: string; idempotencyKey?: string } = {},
+) {
+  return app.inject({
+    method: "POST",
+    url: opts.url ?? "/v1/refunds",
+    headers: { ...authHeader(rawKey), "idempotency-key": opts.idempotencyKey ?? randomUUID() },
+    payload: body,
+  });
+}
+
+async function capturedTransaction(rawKey: string, authorizeFils: number, captureFils?: number) {
+  const txn = await authorize(rawKey, authorizeFils);
+  const cap = await capture(rawKey, txn.id, captureFils === undefined ? {} : { amountFils: captureFils });
+  assert.equal(cap.statusCode, 200, cap.body);
+  return txn;
+}
+
+test("POST /v1/refunds: full refund through the API reverses gross and fee in balanced ledger legs", async () => {
+  const { rawKey } = await createApprovedMerchantWithApiKey("refund-full", 250);
+  const txn = await capturedTransaction(rawKey, 10_000);
+
+  const res = await refund(rawKey, { transactionId: txn.id });
+  assert.equal(res.statusCode, 200, res.body);
+  const body = res.json();
+  assert.equal(body.amountFils, 10_000);
+  assert.equal(body.transactionStatus, "refunded");
+
+  const fee = await pool.query<{ credited: string; reversed: string }>(
+    `SELECT COALESCE(SUM(amount_fils) FILTER (WHERE direction = 'credit'), 0)::text AS credited,
+            COALESCE(SUM(amount_fils) FILTER (WHERE direction = 'debit'), 0)::text AS reversed
+       FROM ledger_entries WHERE transaction_id = $1 AND account_id = 'platform_fee_revenue'`,
+    [txn.id],
+  );
+  assert.equal(Number(body.feeReversedFils), Number(fee.rows[0]!.credited), "the whole fee goes back on a full refund");
+  assert.equal(fee.rows[0]!.credited, fee.rows[0]!.reversed);
+
+  const balance = await pool.query<{ debits: string; credits: string }>(
+    `SELECT COALESCE(SUM(amount_fils) FILTER (WHERE direction = 'debit'), 0)::text AS debits,
+            COALESCE(SUM(amount_fils) FILTER (WHERE direction = 'credit'), 0)::text AS credits
+       FROM ledger_entries WHERE transaction_id = $1`,
+    [txn.id],
+  );
+  assert.equal(balance.rows[0]!.debits, balance.rows[0]!.credits, "every ledger group balances");
+
+  const outbox = await pool.query(
+    `SELECT 1 FROM outbox_events WHERE event_type = 'refund.succeeded' AND aggregate_id = $1`,
+    [txn.id],
+  );
+  assert.equal(outbox.rowCount, 1, "one refund.succeeded event for the webhook and reporting");
+});
+
+test("POST /v1/refunds: partial refunds reverse fees that sum back to exactly the fee charged", async () => {
+  const { rawKey } = await createApprovedMerchantWithApiKey("refund-partials", 225);
+  const txn = await capturedTransaction(rawKey, 1_001);
+  const parts = [333, 333, 335];
+  let reversed = 0;
+  for (const amountFils of parts) {
+    const res = await refund(rawKey, { transactionId: txn.id, amountFils });
+    assert.equal(res.statusCode, 200, res.body);
+    reversed += Number(res.json().feeReversedFils);
+  }
+  const fee = await pool.query<{ credited: string }>(
+    `SELECT COALESCE(SUM(amount_fils), 0)::text AS credited FROM ledger_entries
+      WHERE transaction_id = $1 AND account_id = 'platform_fee_revenue' AND direction = 'credit'`,
+    [txn.id],
+  );
+  assert.equal(reversed, Number(fee.rows[0]!.credited));
+});
+
+test("POST /v1/refunds: cannot refund more than was captured (partial capture)", async () => {
+  const { rawKey } = await createApprovedMerchantWithApiKey("refund-cap", 250);
+  const txn = await capturedTransaction(rawKey, 10_000, 4_000);
+  const first = await refund(rawKey, { transactionId: txn.id });
+  assert.equal(first.statusCode, 200, first.body);
+  assert.equal(first.json().amountFils, 4_000);
+  const second = await refund(rawKey, { transactionId: txn.id, amountFils: 1 });
+  assert.equal(second.statusCode, 422, second.body);
+});
+
+test("POST /v1/refunds: two concurrent full refunds -> exactly one succeeds (FP-209)", async () => {
+  const { rawKey } = await createApprovedMerchantWithApiKey("refund-race", 250);
+  const txn = await capturedTransaction(rawKey, 5_000);
+  const results = await Promise.all([
+    refund(rawKey, { transactionId: txn.id }),
+    refund(rawKey, { transactionId: txn.id }),
+    refund(rawKey, { transactionId: txn.id }),
+  ]);
+  const ok = results.filter((r) => r.statusCode === 200);
+  assert.equal(ok.length, 1, results.map((r) => `${r.statusCode} ${r.body}`).join(" | "));
+  const total = await pool.query<{ sum: string }>(
+    `SELECT COALESCE(SUM(amount_fils), 0)::text AS sum FROM refunds WHERE transaction_id = $1`,
+    [txn.id],
+  );
+  assert.equal(Number(total.rows[0]!.sum), 5_000);
+});
+
+test("POST /v1/refunds: another merchant's transaction is 404 on both paths", async () => {
+  const owner = await createApprovedMerchantWithApiKey("refund-owner");
+  const other = await createApprovedMerchantWithApiKey("refund-other");
+  const txn = await capturedTransaction(owner.rawKey, 2_000);
+
+  const viaShortPath = await refund(other.rawKey, { transactionId: txn.id, merchantId: owner.merchantId });
+  assert.equal(viaShortPath.statusCode, 404, viaShortPath.body);
+  const viaMerchantPath = await refund(
+    other.rawKey,
+    { transactionId: txn.id },
+    { url: `/v1/merchants/${other.merchantId}/refunds` },
+  );
+  assert.equal(viaMerchantPath.statusCode, 404, viaMerchantPath.body);
+  const intoOwnerPath = await refund(
+    other.rawKey,
+    { transactionId: txn.id },
+    { url: `/v1/merchants/${owner.merchantId}/refunds` },
+  );
+  assert.equal(intoOwnerPath.statusCode, 403, intoOwnerPath.body);
+});
+
+test("POST /v1/refunds: a replayed Idempotency-Key refunds once", async () => {
+  const { rawKey } = await createApprovedMerchantWithApiKey("refund-idem");
+  const txn = await capturedTransaction(rawKey, 3_000);
+  const key = randomUUID();
+  const a = await refund(rawKey, { transactionId: txn.id, amountFils: 1_000 }, { idempotencyKey: key });
+  const b = await refund(rawKey, { transactionId: txn.id, amountFils: 1_000 }, { idempotencyKey: key });
+  assert.equal(a.statusCode, 200, a.body);
+  assert.equal(b.statusCode, 200, b.body);
+  assert.equal(a.json().id, b.json().id);
+  const count = await pool.query(`SELECT 1 FROM refunds WHERE transaction_id = $1`, [txn.id]);
+  assert.equal(count.rowCount, 1);
+});
+
+test("POST /v1/refunds: Idempotency-Key header is required", async () => {
+  const { rawKey } = await createApprovedMerchantWithApiKey("refund-nokey");
+  const txn = await capturedTransaction(rawKey, 1_000);
   const res = await app.inject({
     method: "POST",
     url: "/v1/refunds",
     headers: authHeader(rawKey),
-    payload: {},
+    payload: { transactionId: txn.id },
   });
-  assert.equal(res.statusCode, 501, res.body);
-  assert.equal(res.json().error, "not_implemented");
+  assert.equal(res.statusCode, 400, res.body);
 });

@@ -73,8 +73,9 @@ export async function processRefund(
     const txnResult = await client.query<RefundTransactionRow>(
       `SELECT id, merchant_id, status, amount_fils, captured_fils, refunded_fils, acquirer_reference
          FROM transactions
-        WHERE id = $1`,
-      [input.transactionId],
+        WHERE id = $1 AND merchant_id = $2
+        FOR UPDATE`,
+      [input.transactionId, input.merchantId],
     );
     const txn = txnResult.rows[0];
     if (!txn) {
@@ -87,7 +88,9 @@ export async function processRefund(
     const capturedFils = toFils(Number(txn.captured_fils));
     const refundedFils = toFils(Number(txn.refunded_fils));
 
-    const refundableFils = subtractFils(amountAuthorized, refundedFils);
+    // Only money that was actually captured can go back — never the
+    // authorized-but-uncaptured headroom.
+    const refundableFils = subtractFils(capturedFils, refundedFils);
 
     const validation = validateRefundRequest(
       {
@@ -110,18 +113,30 @@ export async function processRefund(
     // the ledger rather than recomputed from the merchant's current
     // mdr_bps, so a rate change after capture can never retroactively alter
     // what a refund reverses.
+    // Net of the negotiated discount adjustment (a debit to fee revenue at
+    // capture), so a refund never reverses more fee than was actually kept.
     const feeResult = await client.query<{ fee_fils: string }>(
-      `SELECT COALESCE(SUM(amount_fils), 0)::text AS fee_fils
+      `SELECT (COALESCE(SUM(amount_fils) FILTER (WHERE direction = 'credit'), 0)
+             - COALESCE(SUM(amount_fils) FILTER (
+                 WHERE direction = 'debit' AND description = 'capture: negotiated discount adjustment'), 0)
+              )::text AS fee_fils
          FROM ledger_entries
         WHERE transaction_id = $1
-          AND account_id = 'platform_fee_revenue'
-          AND direction = 'credit'`,
+          AND account_id = 'platform_fee_revenue'`,
       [txn.id],
     );
     const feeRow = feeResult.rows[0];
     if (!feeRow) {
       throw new Error("processRefund: fee aggregate returned no row");
     }
+
+    // Reserve the amount while the row is still locked, so a concurrent
+    // refund sees it and cannot also pass validation (FP-209). Released
+    // again below if the acquirer declines or errors.
+    await client.query(`UPDATE transactions SET refunded_fils = refunded_fils + $2 WHERE id = $1`, [
+      txn.id,
+      validation.amountFils,
+    ]);
 
     return {
       kind: "proceed" as const,
@@ -151,6 +166,28 @@ export async function processRefund(
 
   // 3 journal
   return withTransaction(pool, async (client) => {
+    // Re-lock the row: this transaction is now the only writer, and every
+    // figure below is read fresh rather than from step 1's snapshot.
+    const lockedResult = await client.query<{ refunded_fils: string | number }>(
+      `SELECT refunded_fils FROM transactions WHERE id = $1 FOR UPDATE`,
+      [prepared.transactionId],
+    );
+    const reservedTotal = toFils(Number(lockedResult.rows[0]?.refunded_fils ?? 0));
+
+    if (acquirerResult.outcome !== "approved") {
+      // Give the reserved amount back.
+      const releasedTotal = subtractFils(reservedTotal, prepared.requestedAmount);
+      await client.query(`UPDATE transactions SET refunded_fils = $2, status = $3 WHERE id = $1`, [
+        prepared.transactionId,
+        releasedTotal,
+        nextStatusAfterRefund({
+          amountFils: prepared.amountAuthorized,
+          capturedFils: prepared.capturedFils,
+          refundedTotalFils: releasedTotal,
+        }),
+      ]);
+    }
+
     if (acquirerResult.outcome === "declined") {
       const body = { error: "refund_declined" };
       await completeIdempotencyKey(client, prepared.claimId, { statusCode: 402, body });
@@ -162,17 +199,30 @@ export async function processRefund(
       return { statusCode: 502, body };
     }
 
-    const newRefundedTotal = addFils(prepared.refundedFils, prepared.requestedAmount);
+    // refunded_fils already includes this refund (reserved in step 1).
+    const newRefundedTotal = reservedTotal;
     const newStatus = nextStatusAfterRefund({
       amountFils: prepared.amountAuthorized,
       capturedFils: prepared.capturedFils,
       refundedTotalFils: newRefundedTotal,
     });
-    const feeReversedFils = calculateRefundFee(
-      prepared.capturedFils,
-      prepared.feeChargedFils,
-      prepared.requestedAmount,
+
+    // Fee reversal is computed on the running total of succeeded refunds and
+    // minus what earlier refunds already reversed, so partial refunds always
+    // sum back to exactly the fee charged — never a fils more or less.
+    const priorResult = await client.query<{ amount: string; fee: string }>(
+      `SELECT COALESCE(SUM(amount_fils), 0)::text AS amount, COALESCE(SUM(fee_reversed_fils), 0)::text AS fee
+         FROM refunds WHERE transaction_id = $1 AND status = 'succeeded'`,
+      [prepared.transactionId],
     );
+    const priorRefundedFils = toFils(Number(priorResult.rows[0]?.amount ?? 0));
+    const priorFeeReversedFils = toFils(Number(priorResult.rows[0]?.fee ?? 0));
+    const succeededTotal = addFils(priorRefundedFils, prepared.requestedAmount);
+    const cumulativeFeeReversed = calculateRefundFee(prepared.capturedFils, prepared.feeChargedFils, succeededTotal);
+    const feeReversedFils =
+      compareFils(cumulativeFeeReversed, priorFeeReversedFils) > 0
+        ? subtractFils(cumulativeFeeReversed, priorFeeReversedFils)
+        : ZERO_FILS;
 
     const refundResult = await client.query<{ id: string; occurred_at: Date }>(
       `INSERT INTO refunds
@@ -186,7 +236,7 @@ export async function processRefund(
         prepared.requestedAmount,
         feeReversedFils,
         acquirerResult.acquirerReference,
-        input.reason ?? null,
+        input.reason ?? "unspecified",
         input.actor.type,
         input.actor.id,
       ],
@@ -196,11 +246,7 @@ export async function processRefund(
       throw new Error("processRefund: insert into refunds returned no row");
     }
 
-    await client.query(`UPDATE transactions SET refunded_fils = $2, status = $3 WHERE id = $1`, [
-      prepared.transactionId,
-      newRefundedTotal,
-      newStatus,
-    ]);
+    await client.query(`UPDATE transactions SET status = $2 WHERE id = $1`, [prepared.transactionId, newStatus]);
 
     // Double-entry reversal, mirroring capture's legs with the directions
     // swapped. ledger_entries has CHECK (amount_fils > 0), so a reversal
@@ -228,7 +274,7 @@ export async function processRefund(
     // The timeline records what this refund did to the captured amount, so
     // it stays readable regardless of what the status column ends up
     // saying: everything captured has now gone back, or only part of it has.
-    const eventType = compareFils(newRefundedTotal, prepared.capturedFils) >= 0 ? "refunded" : "refund_partial";
+    const eventType = compareFils(succeededTotal, prepared.capturedFils) >= 0 ? "refunded" : "refund_partial";
 
     await recordTransactionEvent(client, {
       transactionId: prepared.transactionId,
@@ -251,7 +297,7 @@ export async function processRefund(
         refundId: refund.id,
         amountFils: prepared.requestedAmount,
         feeReversedFils,
-        refundedTotalFils: newRefundedTotal,
+        refundedTotalFils: succeededTotal,
         newStatus,
       },
     });
@@ -264,7 +310,7 @@ export async function processRefund(
       feeReversedFils,
       status: "succeeded",
       transactionStatus: newStatus,
-      refundedTotalFils: newRefundedTotal,
+      refundedTotalFils: succeededTotal,
       acquirerReference: acquirerResult.acquirerReference,
       occurredAt: refund.occurred_at.toISOString(),
     };
