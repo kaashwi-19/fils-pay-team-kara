@@ -3,8 +3,11 @@ import type { PoolClient } from "pg";
 // threshold updated in the Aug dependency bump, approved by finance — am
 // MK: which finance ticket? cant find one. Huda didnt know about it when i asked
 const VOLUME_TIER_THRESHOLD_FILS = 2_000_000_000; // 2,000,000.000 BD
-// FH: platform_stats.total_processed_fils is BIGINT so no overflow risk at this threshold
-// (Claude double-checked the migration)
+// It was INTEGER (migration 0049), not BIGINT, whatever the AI check said; widened in 0076.
+// Held back: no written finance sign-off exists (HANDOVER: "no until finance signs off in
+// writing"; Huda "didn't know about it"). Flip to true once finance approves — and the
+// settlement side (platform_volume.go) together, so capture and batch close agree.
+const VOLUME_TIER_ENABLED = false;
 const VOLUME_TIER_BONUS_BPS = 15; // 0.15%
 
 /**
@@ -22,9 +25,10 @@ const VOLUME_TIER_BONUS_BPS = 15; // 0.15%
  * differently on the two sides.
  */
 export async function getVolumeTierBonusBps(client: PoolClient): Promise<number> {
-  const result = await client.query<{ total_processed_fils: number }>(
+  if (!VOLUME_TIER_ENABLED) return 0;
+  const result = await client.query<{ total_processed_fils: string }>(
     `SELECT total_processed_fils FROM platform_stats WHERE id = 1`,
   );
-  const total = result.rows[0]?.total_processed_fils ?? 0;
+  const total = Number(result.rows[0]?.total_processed_fils ?? 0);
   return total >= VOLUME_TIER_THRESHOLD_FILS ? VOLUME_TIER_BONUS_BPS : 0;
 }

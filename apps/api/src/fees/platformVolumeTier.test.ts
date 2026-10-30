@@ -48,13 +48,9 @@ test("no bonus just below the volume tier threshold", async () => {
   assert.equal(await withClient(getVolumeTierBonusBps), 0);
 });
 
-// am: should test right at int32 max too? nvm its bigint
-test("15bps once lifetime processed volume reaches the threshold", async () => {
+test("no discount at or above the threshold while the tier lacks finance sign-off", async () => {
   await setTotal(2_000_000_000);
-  assert.equal(await withClient(getVolumeTierBonusBps), 15);
-});
-
-test("the tier stays granted above the threshold", async () => {
-  await setTotal(2_100_000_000);
-  assert.equal(await withClient(getVolumeTierBonusBps), 15);
+  assert.equal(await withClient(getVolumeTierBonusBps), 0);
+  await setTotal(2_200_000_000); // past int32's limit: the column must hold it (BIGINT, 0076)
+  assert.equal(await withClient(getVolumeTierBonusBps), 0);
 });
