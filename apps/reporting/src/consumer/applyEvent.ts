@@ -144,11 +144,14 @@ async function applyBatchClosed(client: PoolClient, row: OutboxEventRow): Promis
       `SELECT captured_count FROM merchant_daily_volume WHERE merchant_id = $1 AND volume_date = $2`,
       [payload.merchantId, payload.batchDate],
     );
-    const rollup = rollupResult.rows[0] as { captured_count: number };
-    if (rollup.captured_count < groundTruthCount) {
+    // No rollup row at all (captures written without an outbox event, e.g.
+    // seeded history) is a lag of the whole day, not a crash: throwing here
+    // would roll back the pass and stall the consumer on this event forever.
+    const rollupCount = Number((rollupResult.rows[0] as { captured_count: number } | undefined)?.captured_count ?? 0);
+    if (rollupCount < groundTruthCount) {
       console.warn(
         `reporting rollup lags ground truth for merchant ${payload.merchantId} on ${payload.batchDate}: ` +
-          `rollup=${rollup.captured_count} ground_truth=${groundTruthCount}`,
+          `rollup=${rollupCount} ground_truth=${groundTruthCount}`,
       );
     }
   }

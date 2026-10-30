@@ -223,6 +223,39 @@ test("applyBatchClosed (via applyEvent): a day with real capture activity whose 
   assert.equal(Number(result.rows[0].net_payout_fils), 4_631);
 });
 
+test("applyBatchClosed (via applyEvent): captures with no rollup row at all (e.g. seeded history) warn instead of stalling the consumer", async () => {
+  const merchantId = await createMerchant("batch-closed-no-rollup");
+  const batchId = await createSettlementBatch(merchantId, { status: "closed", paidAt: null });
+  const txnResult = await pool.query<{ id: string }>(
+    `INSERT INTO transactions (merchant_id, status, amount_fils, captured_fils, acquirer_reference, occurred_at)
+     VALUES ($1, 'captured', 4750, 4750, $2, '2026-01-05T10:00:00Z')
+     RETURNING id`,
+    [merchantId, `acq_${randomUUID()}`],
+  );
+  await pool.query(
+    `INSERT INTO transaction_events (transaction_id, event_type, amount_fils, actor_type, occurred_at)
+     VALUES ($1, 'captured', 4750, 'system', '2026-01-05T10:00:00Z')`,
+    [txnResult.rows[0]!.id],
+  );
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    await assert.doesNotReject(
+      withTransaction(pool, (client) =>
+        applyEvent(
+          client,
+          makeRow({
+            event_type: "settlement.batch_closed",
+            payload: { merchantId, batchId, batchDate: "2026-01-05", grossFils: 4_750, feeFils: 119, netPayoutFils: 4_631 },
+          }),
+        ),
+      ),
+    );
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
 test("applyBatchClosed (via applyEvent) is idempotent: applying the identical event twice produces no duplicate row and no drift", async () => {
   const merchantId = await createMerchant("batch-closed-idempotent");
   const batchId = await createSettlementBatch(merchantId, { status: "closed", paidAt: null });
