@@ -1684,3 +1684,28 @@ test("a super_admin's impersonation grant is read-only too, and dies when the ad
   const readRes = await app.inject({ method: "GET", url: "/v1/transactions", headers: { cookie: impCookie } });
   assert.equal(readRes.statusCode, 401, "a disabled admin's grant must stop working");
 });
+
+test("an impersonation grant (support-level) cannot capture or void a transaction", async () => {
+  const admin = await signedInAdmin("support", "imp-capture");
+  const { merchantId } = await createMerchant("imp-capture");
+  const txn = await pool.query<{ id: string }>(
+    `INSERT INTO transactions (merchant_id, status, amount_fils, captured_fils, acquirer_reference)
+     VALUES ($1, 'authorized', 1000, 0, $2) RETURNING id`,
+    [merchantId, `acq-${randomUUID()}`],
+  );
+  const startRes = await app.inject({
+    method: "POST",
+    url: `/v1/admin/merchants/${merchantId}/impersonate`,
+    headers: { cookie: admin.cookie },
+  });
+  const impCookie = parseCookie(startRes.headers["set-cookie"], config.impersonationCookieName);
+  for (const action of ["capture", "void"]) {
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/transactions/${txn.rows[0]!.id}/${action}`,
+      headers: { cookie: impCookie, "idempotency-key": randomUUID() },
+      payload: {},
+    });
+    assert.equal(res.statusCode, 403, `${action}: ${res.body}`);
+  }
+});
