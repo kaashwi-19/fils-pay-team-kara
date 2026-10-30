@@ -249,3 +249,19 @@ test("getAdjustmentImportRows returns an empty list for an unknown import", asyn
   const rows = await getAdjustmentImportRows(pool, randomUUID());
   assert.deepEqual(rows, []);
 });
+
+test("the same adjustment rows cannot be imported twice (double-click, re-upload)", async () => {
+  const adminUserId = await createAdminUser();
+  const merchantId = await createMerchant();
+  const rows = [{ merchantId, amount: "4.750", reason: "august correction" }];
+  await applyAdjustmentImport(pool, { adminUserId, originalFilename: "aug.csv", rows });
+  await assert.rejects(
+    applyAdjustmentImport(pool, { adminUserId, originalFilename: "aug (1).csv", rows }),
+    (err: unknown) => err instanceof Error && (err as { code?: string }).code === "already_imported",
+  );
+  const legs = await pool.query<{ n: string }>(
+    `SELECT COUNT(*)::text AS n FROM ledger_entries WHERE merchant_id = $1`,
+    [merchantId],
+  );
+  assert.equal(Number(legs.rows[0]!.n), 2, "only the first import's two legs were posted");
+});
