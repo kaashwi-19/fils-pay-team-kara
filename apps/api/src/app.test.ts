@@ -398,3 +398,20 @@ test("signup refuses a trivially short password", async () => {
   assert.equal(res.statusCode, 400, res.body);
   assert.equal(res.json().error, "weak_password");
 });
+
+test("after OTP verify the session cookie lives as long as the session, not the 10-minute pending window", async () => {
+  const password = "cookie-lifetime-password-1";
+  const { merchantId, email } = await signup("cookiettl", password);
+  const loginRes = await app.inject({ method: "POST", url: "/v1/auth/login", payload: { merchantId, email, password } });
+  const cookie = parseCookie(loginRes.headers["set-cookie"]);
+  const verify = await app.inject({
+    method: "POST",
+    url: "/v1/auth/otp/verify",
+    headers: { cookie },
+    payload: { code: (loginRes.json() as { devOtpCode: string }).devOtpCode },
+  });
+  assert.equal(verify.statusCode, 200, verify.body);
+  const setCookie = String(verify.headers["set-cookie"] ?? "");
+  const maxAge = Number(/Max-Age=(\d+)/i.exec(setCookie)?.[1] ?? 0);
+  assert.equal(maxAge, config.sessionTtlHours * 3600);
+});
