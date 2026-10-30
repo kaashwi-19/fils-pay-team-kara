@@ -136,6 +136,21 @@ test("authorize -> capture (full) happy path posts correct, balanced ledger legs
   assert.equal(hold.rows[0]!.status, "released");
 });
 
+test("a suspended merchant's API key and dashboard session stop working", async () => {
+  const { merchantId, rawKey } = await createApprovedMerchantWithApiKey("suspended");
+  await authorize(rawKey, 1000);
+  await pool.query(`UPDATE merchants SET status = 'suspended' WHERE id = $1`, [merchantId]);
+  const res = await app.inject({
+    method: "POST",
+    url: "/v1/transactions",
+    headers: { ...authHeader(rawKey), "idempotency-key": randomUUID() },
+    payload: { amountFils: 1000, card: VALID_CARD, reference: "after-suspension" },
+  });
+  assert.equal(res.statusCode, 401, "a suspended merchant must not take new payments");
+  const count = await pool.query(`SELECT count(*)::int AS n FROM transactions WHERE merchant_id = $1`, [merchantId]);
+  assert.equal(count.rows[0].n, 1);
+});
+
 test("authorize -> capture (partial) -> capture (remainder) transitions status correctly", async () => {
   const { rawKey } = await createApprovedMerchantWithApiKey("partial-capture");
   const txn = await authorize(rawKey, 10_000);

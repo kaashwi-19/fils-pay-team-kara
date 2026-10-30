@@ -16,16 +16,26 @@ export interface ApiKeyContext {
 export async function verifyApiKey(pool: Pool, rawKey: string): Promise<ApiKeyContext | null> {
   const keyHash = sha256Hex(rawKey);
   const result = await pool.query<{ id: string; merchant_id: string }>(
-    `SELECT id, merchant_id FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL`,
+    `SELECT k.id, k.merchant_id
+       FROM api_keys k
+       JOIN merchants m ON m.id = k.merchant_id
+      WHERE k.key_hash = $1 AND k.revoked_at IS NULL
+        AND m.status = 'active'`,
     [keyHash],
   );
   const row = result.rows[0];
   if (!row) return null;
 
   // Fire-and-forget: don't let a `last_used_at` write failure ever block or
-  // fail the request it's merely instrumenting.
+  // fail the request it's merely instrumenting. At most once a minute per
+  // key: an UPDATE on every request made all traffic on one key queue on
+  // that single row's lock, holding pool connections while it waited.
   void pool
-    .query(`UPDATE api_keys SET last_used_at = now() WHERE id = $1`, [row.id])
+    .query(
+      `UPDATE api_keys SET last_used_at = now()
+        WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')`,
+      [row.id],
+    )
     .catch(() => {});
 
   return { merchantId: row.merchant_id, apiKeyId: row.id };
