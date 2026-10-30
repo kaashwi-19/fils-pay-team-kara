@@ -2,7 +2,6 @@ import type { FastifyInstance } from "fastify";
 import { requireAdminRole, requireAdminSession } from "../adminAuth/middleware.js";
 import { insertAdminAuditLog } from "../adminAudit/log.js";
 import { merchantExists, UUID_RE } from "../admin/merchants.js";
-import { reconcileSandboxFlag } from "../admin/merchantFlags.js";
 import { recomputeTransactionStatusesForMerchant } from "../admin/transactionStatusRecompute.js";
 import { withTransaction } from "../db/withTransaction.js";
 import { NotFoundError, UnauthorizedError } from "../lib/errors.js";
@@ -25,7 +24,12 @@ export async function adminMerchantsRecomputeRoutes(app: FastifyInstance): Promi
 
       const result = await withTransaction(app.db, async (client) => {
         const recompute = await recomputeTransactionStatusesForMerchant(client, request.params.id);
-        const flagsUpdated = await reconcileSandboxFlag(client, request.params.id, recompute);
+        // This used to also call reconcileSandboxFlag, which flipped a
+        // test-mode (sandbox) merchant to LIVE whenever it had no open
+        // authorizations — so running a status recompute silently put test
+        // merchants into the real settlement run. Taking a merchant live is
+        // a deliberate decision, not a side effect of a maintenance tool.
+        const flagsUpdated: string[] = [];
         await insertAdminAuditLog(client, {
           adminUserId: adminAuth.adminUserId,
           action: "transaction_status_recompute",
