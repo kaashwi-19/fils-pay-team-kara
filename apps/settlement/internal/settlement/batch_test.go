@@ -2,6 +2,7 @@ package settlement
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strconv"
 	"strings"
@@ -584,5 +585,17 @@ func TestPayoutBatch_WritesExactlyOneDisbursement(t *testing.T) {
 	}
 	if got := countRows(t, pool, `SELECT count(*) FROM settlement_payout_disbursements WHERE settlement_batch_id = $1`, closed.BatchID); got != 1 {
 		t.Fatalf("disbursements = %d, want 1", got)
+	}
+}
+
+// Closing today (or a future day) early would orphan every later payment that
+// day: refuse it.
+func TestCloseBatch_RefusesADayThatHasNotEnded(t *testing.T) {
+	pool := mustPool(t)
+	merchantID := insertActiveMerchant(t, pool, 250)
+	today := time.Now().In(businessDayLocation)
+	todayDate := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, time.UTC)
+	if _, err := CloseBatch(context.Background(), pool, merchantID, todayDate); !errors.Is(err, ErrBusinessDayNotOver) {
+		t.Fatalf("CloseBatch(today) err = %v, want ErrBusinessDayNotOver", err)
 	}
 }
