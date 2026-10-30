@@ -46,6 +46,33 @@ export function buildApp(config: Config, pool: Pool, options: BuildAppOptions = 
   app.decorate("acquirer", createAcquirerSimulator(config));
   app.decorate("webhookTransport", options.webhookTransport ?? createFetchTransport());
 
+  // Load shedding. Without it, a burst beyond what the database pool and the
+  // acquirer can serve just queued: at 400 concurrent users p95 latency hit
+  // 8.9 s and clients timed out anyway. Past the limit we answer 503 with
+  // Retry-After straight away (no database work), so admitted requests stay
+  // fast and the client knows to retry. Health checks are never shed.
+  if (config.maxInFlightRequests > 0) {
+    let inFlight = 0;
+    const counted = new WeakSet<object>();
+    app.addHook("onRequest", async (request, reply) => {
+      if (request.url === "/healthz") return;
+      if (inFlight >= config.maxInFlightRequests) {
+        reply.header("retry-after", "1").code(503).send({ error: "overloaded", message: "server busy, retry shortly" });
+        return reply;
+      }
+      inFlight += 1;
+      counted.add(request);
+    });
+    const release = async (request: object): Promise<void> => {
+      if (counted.has(request)) {
+        counted.delete(request);
+        inFlight -= 1;
+      }
+    };
+    app.addHook("onResponse", release);
+    app.addHook("onRequestAbort", release);
+  }
+
   app.register(cookiesPlugin);
   app.register(multipartPlugin, { config });
   app.setErrorHandler(errorHandler);

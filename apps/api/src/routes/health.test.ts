@@ -46,3 +46,34 @@ test("GET /readyz reflects the module-scoped flag, not a live DB probe", async (
   const stillReady = await app.inject({ method: "GET", url: "/readyz" });
   assert.equal(stillReady.statusCode, 200);
 });
+
+test("load shedding: past MAX_IN_FLIGHT_REQUESTS new requests get 503 + Retry-After at once; health checks are never shed", async () => {
+  const limited = buildApp(
+    loadConfig({
+      DATABASE_URL: "postgres://unused/unused",
+      NODE_ENV: "test",
+      INTERNAL_API_TOKEN: "test-internal-token",
+      WEBHOOK_SECRET_ENCRYPTION_KEY: "Y1ZTGTcYbe30GZJebys9w7T3OYZNKewuOH3SUCEdRQk=",
+      MAX_IN_FLIGHT_REQUESTS: "1",
+    }),
+    pool,
+  );
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  limited.get("/slow", async () => {
+    await gate;
+    return { ok: true };
+  });
+  const first = limited.inject({ method: "GET", url: "/slow" });
+  await new Promise((r) => setTimeout(r, 50));
+  const second = await limited.inject({ method: "GET", url: "/slow" });
+  assert.equal(second.statusCode, 503);
+  assert.equal(second.headers["retry-after"], "1");
+  const health = await limited.inject({ method: "GET", url: "/healthz" });
+  assert.equal(health.statusCode, 200);
+  release();
+  assert.equal((await first).statusCode, 200);
+  const third = await limited.inject({ method: "GET", url: "/slow" });
+  assert.equal(third.statusCode, 200, "the slot is released once the first request finishes");
+  await limited.close();
+});

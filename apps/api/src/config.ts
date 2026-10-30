@@ -13,6 +13,8 @@ export interface Config {
   databaseUrl: string;
 
   pgPoolMax: number;
+  /** Requests allowed in progress at once before new ones get 503 + Retry-After. 0 = no limit. */
+  maxInFlightRequests: number;
   pgPoolMin: number;
   pgPoolIdleTimeoutMs: number;
   pgPoolConnectionTimeoutMs: number;
@@ -200,6 +202,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     databaseUrl,
 
     pgPoolMax: parseIntEnv(env.PG_POOL_MAX, 5),
+    maxInFlightRequests: parseIntEnv(env.MAX_IN_FLIGHT_REQUESTS, 0),
     pgPoolMin: parseIntEnv(env.PG_POOL_MIN, 0),
     pgPoolIdleTimeoutMs: parseIntEnv(env.PG_POOL_IDLE_TIMEOUT_MS, 30_000),
     pgPoolConnectionTimeoutMs: parseIntEnv(env.PG_POOL_CONNECTION_TIMEOUT_MS, 5_000),

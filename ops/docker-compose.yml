@@ -98,6 +98,12 @@ services:
       # to the dashboard. For this demo environment the login page shows the
       # code instead. Remove this line as soon as a real OTP sender exists.
       OTP_DEV_EXPOSE: "true"
+      # Payments hold a database connection while the acquirer answers
+      # (100-400 ms), so 5 connections capped writes at ~28 requests/s.
+      # 20 measured ~104 requests/s on one CPU (docs: Capacity).
+      PG_POOL_MAX: "20"
+      # Beyond this many requests in progress, answer 503 + Retry-After at once.
+      MAX_IN_FLIGHT_REQUESTS: "100"
       # Payment-link URLs point at the dashboard's /pay page on this server.
       CHECKOUT_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost}
       # One application role (filspay) owns the whole database in this
