@@ -1,7 +1,13 @@
+import { randomInt } from "node:crypto";
+
+// Every value here guards something — OTP codes, payment-link tokens, invite
+// codes — so it must come from the operating system's cryptographic random
+// source (crypto.randomInt). Math.random() is a predictable PRNG: its output
+// can be reconstructed from a handful of observed values.
+
 /** Generates a string of `n` random decimal digits (e.g. "042817"). */
 export function randomDigits(n: number): string {
-  const max = 10 ** n;
-  return Math.floor(Math.random() * max)
+  return randomInt(0, 10 ** n)
     .toString()
     .padStart(n, "0");
 }
@@ -10,7 +16,7 @@ export function randomDigits(n: number): string {
 export function randomFromAlphabet(alphabet: string, n: number): string {
   let out = "";
   for (let i = 0; i < n; i++) {
-    out += alphabet[Math.floor(Math.random() * alphabet.length)];
+    out += alphabet[randomInt(0, alphabet.length)];
   }
   return out;
 }

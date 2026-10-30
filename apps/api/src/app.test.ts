@@ -231,6 +231,45 @@ test("otp verify with the wrong code is rejected", async () => {
   assert.equal(rightRes.statusCode, 200, rightRes.body);
 });
 
+test("50 parallel wrong OTP guesses are limited to max attempts, not judged all at once", async () => {
+  const password = "parallel-guess-password-789";
+  const { merchantId, email } = await signup("otprace", password);
+  const loginRes = await app.inject({ method: "POST", url: "/v1/auth/login", payload: { merchantId, email, password } });
+  const cookie = parseCookie(loginRes.headers["set-cookie"]);
+  const realCode = (loginRes.json() as { devOtpCode: string }).devOtpCode;
+  const guesses = Array.from({ length: 50 }, (_, i) => String(i).padStart(6, "0")).filter((g) => g !== realCode);
+  const results = await Promise.all(
+    guesses.map((code) => app.inject({ method: "POST", url: "/v1/auth/otp/verify", headers: { cookie }, payload: { code } })),
+  );
+  const judged = results.filter((r) => r.statusCode === 401 && r.json().error === "invalid_code").length;
+  assert.ok(judged <= config.otpMaxAttempts, `${judged} guesses were judged; max is ${config.otpMaxAttempts}`);
+});
+
+test("an OTP resend keeps the guess budget instead of resetting it", async () => {
+  const password = "resend-budget-password-321";
+  const { merchantId, email } = await signup("otpresend", password);
+  const loginRes = await app.inject({ method: "POST", url: "/v1/auth/login", payload: { merchantId, email, password } });
+  const cookie = parseCookie(loginRes.headers["set-cookie"]);
+  const realCode = (loginRes.json() as { devOtpCode: string }).devOtpCode;
+  const wrong = realCode === "000000" ? "111111" : "000000";
+  for (let i = 0; i < config.otpMaxAttempts - 1; i++) {
+    await app.inject({ method: "POST", url: "/v1/auth/otp/verify", headers: { cookie }, payload: { code: wrong } });
+  }
+  // Let the 30 s resend throttle pass without waiting.
+  await pool.query(
+    `UPDATE otp_challenges SET created_at = now() - interval '1 minute'
+      WHERE id = (SELECT otp_challenge_id FROM sessions WHERE token_hash = encode(sha256(convert_to($1, 'UTF8')), 'hex'))`,
+    [decodeURIComponent(cookie.slice(cookie.indexOf("=") + 1))],
+  );
+  const resend = await app.inject({ method: "POST", url: "/v1/auth/otp/resend", headers: { cookie } });
+  assert.equal(resend.statusCode, 200, resend.body);
+  const newWrong = (resend.json() as { devOtpCode: string }).devOtpCode === "000000" ? "111111" : "000000";
+  const lastAllowed = await app.inject({ method: "POST", url: "/v1/auth/otp/verify", headers: { cookie }, payload: { code: newWrong } });
+  assert.equal(lastAllowed.statusCode, 401);
+  const overBudget = await app.inject({ method: "POST", url: "/v1/auth/otp/verify", headers: { cookie }, payload: { code: newWrong } });
+  assert.equal(overBudget.statusCode, 429, "the resend must not have reset the attempt counter");
+});
+
 test("KYC upload rejects a fake .pdf whose bytes don't start with %PDF", async () => {
   const { merchantId, cookie } = await signupLoginAndVerify("kycfake");
 
