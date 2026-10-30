@@ -314,6 +314,16 @@ export async function getReconciliationReport(
       [input.merchantId],
     ),
   ]);
+  // Refunds (FP-212) not yet in a batch are pending too, with the opposite
+  // sign: the ledger already moved (amount back, fee reversed), settlement
+  // hasn't. Left out, every refund showed as an unexplained negative gap.
+  const pendingRefunds = await pool.query<{ net: string }>(
+    `SELECT COALESCE(SUM(amount_fils - fee_reversed_fils), 0) AS net
+       FROM refunds
+      WHERE merchant_id = $1 AND status = 'succeeded' AND settlement_batch_id IS NULL
+        AND occurred_at >= $2 AND occurred_at < $3`,
+    [input.merchantId, windowStart, windowEnd],
+  );
 
   // MK: merchants.mdr_bps is kept in sync with the current fee_schedules row by the 0046 trigger,
   // so reading it here is the same as resolving the schedule
@@ -327,6 +337,8 @@ export async function getReconciliationReport(
     const feeFils = estimateFeeFils(amountFils, mdrBps, discountBps);
     pendingUnbatchedFils += amountFils - feeFils;
   }
+
+  pendingUnbatchedFils -= Number(pendingRefunds.rows[0]?.net ?? 0);
 
   const ledgerMerchantPayableNetFils = Number(ledgerResult.rows[0]?.net ?? 0);
   const settlementNetPayoutFils = Number(settlementResult.rows[0]?.total ?? 0);

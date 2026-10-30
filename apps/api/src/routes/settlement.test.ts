@@ -412,6 +412,30 @@ test("GET /v1/settlement/reconciliation with an unbatched capture reports it as 
   assert.equal(report.explained, true);
 });
 
+test("GET /v1/settlement/reconciliation still ties out after a partial refund that is not batched yet", async () => {
+  const { rawKey } = await createApprovedMerchantWithApiKey("reconciliation-refund", 250);
+  const txn = await authorize(rawKey, 10_000);
+  await capture(rawKey, txn.id);
+  const refund = await app.inject({
+    method: "POST",
+    url: "/v1/refunds",
+    headers: { ...authHeader(rawKey), "idempotency-key": randomUUID() },
+    payload: { transactionId: txn.id, amountFils: 4_000 },
+  });
+  assert.equal(refund.statusCode, 200, refund.body);
+
+  const businessDate = todayBahrainDateString();
+  const res = await app.inject({
+    method: "GET",
+    url: `/v1/settlement/reconciliation?from=${businessDate}&to=${addOneCalendarDay(businessDate)}`,
+    headers: authHeader(rawKey),
+  });
+  assert.equal(res.statusCode, 200, res.body);
+  const report = res.json() as { gapFils: number; explained: boolean };
+  assert.equal(report.gapFils, 0, "a refund is pending settlement, not an unexplained gap");
+  assert.equal(report.explained, true);
+});
+
 test("GET /v1/settlement/summary sums captured amounts for transactions with a single capture event", async () => {
   const { rawKey } = await createApprovedMerchantWithApiKey("summary-single-event", 250);
   const txn1 = await authorize(rawKey, 10_000);
