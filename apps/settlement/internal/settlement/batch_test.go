@@ -3,6 +3,7 @@ package settlement
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -639,5 +640,48 @@ func TestCloseBatch_RefundsLargerThanTheDayRollForward(t *testing.T) {
 	}
 	if want := money.Fils(10000-5000) - (fee2 - 125); r2.NetPayoutFils != want {
 		t.Fatalf("day2 net payout = %d, want %d (the refund rolled forward)", r2.NetPayoutFils, want)
+	}
+}
+
+func TestRunDailyBatch_OneMerchantFailingDoesNotBlockTheOthers(t *testing.T) {
+	pool := mustPool(t)
+	ctx := context.Background()
+	const mdrBps = 250
+	bad := insertActiveMerchant(t, pool, mdrBps)
+	good := insertActiveMerchant(t, pool, mdrBps)
+	for good.String() < bad.String() { // the failing merchant must come first
+		good = insertActiveMerchant(t, pool, mdrBps)
+	}
+
+	businessDate := time.Date(2025, 2, 3, 0, 0, 0, 0, time.UTC)
+	start, _ := BusinessDayWindow(businessDate)
+	insertCaptureEvent(t, pool, good, mdrBps, 5_000, start.Add(time.Hour))
+
+	// Make closing the bad merchant's batch fail.
+	if _, err := pool.Exec(ctx, fmt.Sprintf(`
+		CREATE OR REPLACE FUNCTION test_fail_batch() RETURNS trigger AS $$
+		BEGIN
+		  IF NEW.merchant_id = '%s' THEN RAISE EXCEPTION 'simulated failure'; END IF;
+		  RETURN NEW;
+		END $$ LANGUAGE plpgsql;
+		CREATE TRIGGER test_fail_batch BEFORE INSERT ON settlement_batches
+		  FOR EACH ROW EXECUTE FUNCTION test_fail_batch();`, bad)); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS test_fail_batch ON settlement_batches; DROP FUNCTION IF EXISTS test_fail_batch();`)
+	})
+
+	_, err := RunDailyBatch(ctx, pool, businessDate, nil)
+	if err == nil {
+		t.Fatalf("RunDailyBatch should report the failing merchant")
+	}
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM settlement_batches WHERE merchant_id = $1 AND batch_date = $2`,
+		good, businessDate).Scan(&status); err != nil {
+		t.Fatalf("good merchant's batch was never created: %v", err)
+	}
+	if status != "paid" {
+		t.Fatalf("good merchant's batch status = %s, want paid", status)
 	}
 }
