@@ -1,5 +1,5 @@
 import type { Pool } from "pg";
-import { NotFoundError } from "../lib/errors.js";
+import { BadRequestError, NotFoundError } from "../lib/errors.js";
 import { todayStamp } from "../lib/dateUtil.js";
 
 export interface BusinessProfile {
@@ -94,13 +94,20 @@ const PATCHABLE_COLUMNS: Record<keyof BusinessProfilePatch, string> = {
 /** Partial update of the editable business-profile fields (all except
  *  merchant_id). Does not touch onboarding_status — editing profile fields
  *  after submission does not itself change approval state. */
-// FH: PATCHABLE_COLUMNS values interpolated into the SQL — injection? claude: yes
-// column names come from the fixed map, not user input — am
 export async function updateBusinessProfile(
   pool: Pool,
   merchantId: string,
   patch: BusinessProfilePatch,
 ): Promise<BusinessProfile> {
+  // Only the fields in PATCHABLE_COLUMNS. Any other key in the request body
+  // used to be looked up in the map and interpolated as "undefined = $2" (or,
+  // for "constructor"/"toString", a function's source text) — a guaranteed
+  // SQL error and a 500 instead of a clear 400.
+  for (const key of Object.keys(patch)) {
+    if (!Object.prototype.hasOwnProperty.call(PATCHABLE_COLUMNS, key)) {
+      throw new BadRequestError("invalid_field", `unknown business profile field: ${key}`);
+    }
+  }
   const entries = Object.entries(patch).filter(([, value]) => value !== undefined) as Array<
     [keyof BusinessProfilePatch, string | null]
   >;

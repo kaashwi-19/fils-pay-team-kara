@@ -435,3 +435,14 @@ test("session fixation: the pre-OTP cookie stops working once the OTP is verifie
   const withNew = await app.inject({ method: "GET", url: "/v1/auth/me", headers: { cookie: freshCookie } });
   assert.equal(withNew.statusCode, 200, withNew.body);
 });
+
+test("a business profile update with an unknown field is a 400, not a 500", async () => {
+  const { merchantId, cookie } = await signupLoginAndVerify("bizprofile");
+  const res = await app.inject({
+    method: "PATCH",
+    url: `/v1/merchants/${merchantId}/business-profile`,
+    headers: { cookie },
+    payload: { legalName: "Acme W.L.L.", constructor: "x" },
+  });
+  assert.equal(res.statusCode, 400, res.body);
+});
