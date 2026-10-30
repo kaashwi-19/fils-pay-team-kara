@@ -288,6 +288,23 @@ test("KYC upload rejects a fake .pdf whose bytes don't start with %PDF", async (
   assert.equal(res.json().error, "invalid_file_type");
 });
 
+test("a JPEG renamed .pdf is not accepted as a commercial registration (bytes decide, not the name)", async () => {
+  const { merchantId, cookie } = await signupLoginAndVerify("kycrenamed");
+  const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00]);
+  const { body, contentType } = buildMultipart(
+    { documentType: "commercial_registration" },
+    { fieldName: "file", filename: "CR-2026.pdf", contentType: "application/pdf", data: jpegBytes },
+  );
+  const res = await app.inject({
+    method: "POST",
+    url: `/v1/merchants/${merchantId}/kyc/documents`,
+    headers: { cookie, "content-type": contentType },
+    payload: body,
+  });
+  assert.equal(res.statusCode, 422, res.body);
+  assert.equal(res.json().error, "document_must_be_pdf");
+});
+
 test("KYC upload accepts a real tiny PDF and moves onboarding_status to under_review", async () => {
   const { merchantId, cookie } = await signupLoginAndVerify("kycreal");
 
@@ -310,7 +327,9 @@ test("KYC upload accepts a real tiny PDF and moves onboarding_status to under_re
   assert.equal(meRes.json().merchant.onboardingStatus, "under_review");
 });
 
-test("KYC upload rejects a commercial_registration submitted as a non-PDF filename", async () => {
+// The PDF rule is decided by the bytes: a genuine PDF is a PDF whatever it is
+// called (the opposite case — a JPEG named .pdf — is rejected above).
+test("KYC upload accepts a genuine PDF commercial_registration even with an odd filename", async () => {
   const { merchantId, cookie } = await signupLoginAndVerify("kycnonpdf");
 
   const pdfBuffer = Buffer.from("%PDF-1.4\n%mock minimal pdf for test\n%%EOF");
@@ -325,8 +344,7 @@ test("KYC upload rejects a commercial_registration submitted as a non-PDF filena
     headers: { cookie, "content-type": contentType },
     payload: body,
   });
-  assert.equal(res.statusCode, 422, res.body);
-  assert.equal(res.json().error, "document_must_be_pdf");
+  assert.equal(res.statusCode, 201, res.body);
 });
 
 test("API key issuance shows the raw key exactly once; a subsequent list never exposes it", async () => {

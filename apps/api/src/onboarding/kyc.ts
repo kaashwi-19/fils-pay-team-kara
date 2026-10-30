@@ -64,7 +64,10 @@ export async function recordKycDocument(
   // already confirmed the bytes are one of our three accepted formats, so
   // this only narrows which of those three this particular document type
   // requires.
-  if (PDF_ONLY_DOCUMENT_TYPES.includes(input.documentType) && !input.fileName.toLowerCase().endsWith(".pdf")) {
+  // Decided by the detected bytes, not the file name (ARCHITECTURE: "KYC
+  // uploads are validated by detected content type"). A phone photo renamed
+  // cr.pdf used to pass as a commercial registration certificate.
+  if (PDF_ONLY_DOCUMENT_TYPES.includes(input.documentType) && detected !== "pdf") {
     throw new UnprocessableEntityError("document_must_be_pdf", "commercial_registration and bank_letter documents must be a PDF");
   }
 
