@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm test*)",
+      "Bash(npx tsx --test*)",
+      "Bash(npx tsc --noEmit*)",
+      "Bash(scripts/ai/*)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(git stash*)",
+      "Bash(psql*)",
+      "Read(**)",
+      "Grep(**)",
+      "Glob(**)"
+    ],
+    "ask": [
+      "Bash(git commit*)",
+      "Bash(git push*)",
+      "Bash(docker*)",
+      "Edit(db/migrations/**)"
+    ],
+    "deny": [
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git reset --hard*)",
+      "Bash(rm -rf*)",
+      "Read(ops/.env)",
+      "Read(**/.env)",
+      "Edit(ops/.env)",
+      "Bash(*SEED_RESET_EXISTING_DATA=yes*)"
+    ]
+  }
+}
