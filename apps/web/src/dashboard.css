@@ -308,3 +308,61 @@
   min-width: 1px;
   background: #4a7ebb;
 }
+
+
+/* ---------- Team KARA visual refresh (theme layer; overrides the rules above) ---------- */
+:root {
+  --brand: #9b1b30; --brand-dark: #6e1222; --brand-soft: #fbeef0;
+  --ink: #1b1d2a; --muted: #6b6f80; --line: #e7e5ee; --bg: #f6f4f8; --card: #ffffff;
+}
+.dash-shell, .dash-centered {
+  font-family: "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--ink);
+  background: radial-gradient(1200px 400px at 10% -10%, #fde7eb 0%, transparent 60%), var(--bg);
+}
+.dash-shell code, .dash-shell .dash-mono { font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; }
+.dash-header {
+  background: linear-gradient(90deg, var(--brand-dark), var(--brand) 55%, #c0392b);
+  border-bottom: none; color: #fff; box-shadow: 0 6px 24px rgba(155, 27, 48, 0.25);
+  padding: 0.9rem 1.75rem;
+}
+.dash-brand { font-weight: 800; font-size: 1.25rem; letter-spacing: -0.02em; color: #fff; }
+.dash-nav a { color: rgba(255,255,255,0.85); font-weight: 500; padding: 0.35rem 0.7rem; border-radius: 999px; transition: background .15s, color .15s; }
+.dash-nav a:hover { background: rgba(255,255,255,0.14); color: #fff; }
+.dash-nav a.active { color: var(--brand); background: #fff; text-decoration: none; font-weight: 700; }
+.dash-identity { color: rgba(255,255,255,0.9); }
+.dash-role-chip { border-color: rgba(255,255,255,0.6); color: #fff; border-radius: 999px; padding: 0.1rem 0.55rem; }
+.dash-header .dash-button { background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.5); color: #fff; }
+.dash-shell h1 { font-weight: 800; letter-spacing: -0.03em; color: var(--ink); }
+.dash-shell h2 { font-weight: 700; letter-spacing: -0.01em; color: var(--brand-dark); }
+.dash-button, .dash-button-link {
+  background: var(--brand); color: #fff; border: 1px solid var(--brand); border-radius: 10px;
+  padding: 0.5rem 1.05rem; font-family: inherit; font-weight: 600; cursor: pointer;
+  box-shadow: 0 2px 8px rgba(155, 27, 48, 0.2); transition: transform .1s, box-shadow .15s, background .15s;
+}
+.dash-button:hover:not(:disabled), .dash-button-link:hover { background: var(--brand-dark); box-shadow: 0 4px 14px rgba(155, 27, 48, 0.3); transform: translateY(-1px); }
+.dash-button:disabled { opacity: 0.55; cursor: not-allowed; }
+.dash-table { background: var(--card); border-radius: 14px; overflow: hidden; border: 1px solid var(--line); box-shadow: 0 4px 18px rgba(27, 29, 42, 0.05); }
+.dash-table th { background: var(--brand-soft); color: var(--brand-dark); font-weight: 700; font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.04em; }
+.dash-table th, .dash-table td { border-color: var(--line); }
+.dash-table tbody tr:hover td { background: #fcf7f8; }
+.dash-dl { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 1.1rem 1.4rem; box-shadow: 0 4px 18px rgba(27, 29, 42, 0.05); }
+.dash-dl dt { color: var(--muted); font-weight: 600; }
+.dash-form input, .dash-form select, .dash-form textarea {
+  font-family: inherit; border: 1px solid var(--line); border-radius: 10px; padding: 0.5rem 0.7rem; background: #fff;
+}
+.dash-form input:focus, .dash-form select:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(155, 27, 48, 0.15); }
+.dash-status { display: inline-block; padding: 0.15rem 0.65rem; border-radius: 999px; font-size: 0.82em; font-weight: 700; background: #eef0f4; color: #4b5162; }
+.dash-status-captured, .dash-status-paid, .dash-status-succeeded, .dash-status-active { background: #e3f6ec; color: #13794a; }
+.dash-status-authorized, .dash-status-partially_captured, .dash-status-pending, .dash-status-reserved, .dash-status-open { background: #fff4dc; color: #9a6400; }
+.dash-status-partially_refunded { background: #e8efff; color: #2f55c4; }
+.dash-status-refunded, .dash-status-closed { background: #efe9fb; color: #6a3fc1; }
+.dash-status-voided, .dash-status-canceled, .dash-status-disabled, .dash-status-exhausted, .dash-status-failed, .dash-status-chargeback { background: #fde8ea; color: #b4232f; }
+.dash-notice { background: #e3f6ec; color: #13794a; border: 1px solid #b9e6cc; border-radius: 10px; padding: 0.6rem 0.9rem; font-weight: 600; }
+.dash-error { background: #fde8ea; color: #b4232f; border: 1px solid #f5c2c7; border-radius: 10px; padding: 0.6rem 0.9rem; }
+.dash-shell a { color: var(--brand); }
+.dash-header a { color: inherit; }
+.dash-centered { background: transparent; }
+.dash-centered .dash-form { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 1.5rem; box-shadow: 0 10px 30px rgba(27, 29, 42, 0.08); }
+.dash-centered h1 { color: var(--brand); font-weight: 800; letter-spacing: -0.03em; }
+.dash-header .dash-muted, .dash-header span { color: rgba(255,255,255,0.85); }
