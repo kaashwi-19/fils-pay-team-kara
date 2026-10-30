@@ -176,6 +176,18 @@ test("a second merchant sharing the same owner email resolves correctly via requ
   });
   assert.equal(cross.statusCode, 401);
   assert.equal(cross.json().error, "invalid_credentials");
+
+  // Completing B's login must land in merchant B, not whichever merchant
+  // shares the email first.
+  const cookieB = parseCookie(loginB.headers["set-cookie"]);
+  const verifyB = await app.inject({
+    method: "POST",
+    url: "/v1/auth/otp/verify",
+    headers: { cookie: cookieB },
+    payload: { code: (loginB.json() as { devOtpCode: string }).devOtpCode },
+  });
+  assert.equal(verifyB.statusCode, 200, verifyB.body);
+  assert.equal(verifyB.json().merchantId, merchantBId, "logging in to B must sign you in to B");
 });
 
 test("login resolves the OTP recipient to the same account that was authenticated", async () => {
