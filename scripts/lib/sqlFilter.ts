@@ -7,7 +7,12 @@ export function buildWhere(
   for (const [col, val] of Object.entries(filters)) {
     if (val === undefined || val === null) continue;
     if (Array.isArray(val)) {
-      if (val.length === 0) continue;
+      // An empty list matches nothing. Skipping it would widen the filter —
+      // for a DELETE, to the whole table.
+      if (val.length === 0) {
+        parts.push("false");
+        continue;
+      }
       values.push(val);
       parts.push(`${col} = ANY($${idx}::uuid[])`);
       idx++;
@@ -26,5 +31,8 @@ export function buildDelete(
   filters: Record<string, unknown>,
 ): { text: string; values: unknown[] } {
   const { clause, values } = buildWhere(filters);
+  if (clause === "") {
+    throw new Error(`buildDelete: refusing an unfiltered DELETE FROM ${table}`);
+  }
   return { text: `DELETE FROM ${table} ${clause}`.trim(), values };
 }

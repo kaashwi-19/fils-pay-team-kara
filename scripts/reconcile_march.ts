@@ -13,9 +13,21 @@ import { pathToFileURL } from "node:url";
 import { Client } from "pg";
 import { formatBhd, toFils } from "@filspay/money";
 
+/** Bahrain is UTC+3 all year (no DST). */
+const BAHRAIN_OFFSET_MS = 3 * 60 * 60 * 1000;
+
+/** The Bahrain calendar month, as UTC instants: 1 March 00:00 Bahrain is
+ *  28 Feb 21:00 UTC. (HANDOVER: "must use the Bahrain month, not a UTC
+ *  month" — the UTC version dropped 1 March 00:00–03:00 and took in
+ *  1 April 00:00–03:00.) */
 export function monthBounds(year: number, month: number): { start: Date; end: Date } {
-  return { start: new Date(Date.UTC(year, month - 1, 1)), end: new Date(Date.UTC(year, month, 1)) };
+  return {
+    start: new Date(Date.UTC(year, month - 1, 1) - BAHRAIN_OFFSET_MS),
+    end: new Date(Date.UTC(year, month, 1) - BAHRAIN_OFFSET_MS),
+  };
 }
+
+export const SWEEP_DESCRIPTION = "March 2026 scheme rounding residue sweep — manual recon per finance";
 
 export interface ResidueRow {
   merchantId: string;
@@ -68,11 +80,13 @@ function groupByMerchant(rows: ResidueRow[]): MerchantResidue[] {
   return [...byMerchant.values()];
 }
 
-// am: re-running is safe, entry_group_id dedupes it
+// Re-running used to post everything again: entry_group_id is a fresh random
+// UUID per run, so nothing deduped it (that is how the staging gap doubled).
+// main() now refuses to post if any sweep entries already exist.
 async function postResidueCorrection(client: Client, merchant: MerchantResidue, now: Date): Promise<void> {
   if (merchant.residueFils <= 0) return;
   const entryGroupId = randomUUID();
-  const description = "March 2026 scheme rounding residue sweep — manual recon per finance";
+  const description = SWEEP_DESCRIPTION;
   await client.query(
     `INSERT INTO ledger_entries (entry_group_id, merchant_id, account_id, direction, amount_fils, occurred_at, description)
      VALUES ($1, $2, 'merchant_payable', 'debit', $3, $4, $5),
@@ -105,6 +119,25 @@ async function main(): Promise<void> {
 
     await client.query("BEGIN");
     try {
+      // One sweep at a time, and never twice: report any earlier run instead.
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext('scripts.reconcile_march'))`);
+      const previous = await client.query<{ groups: string; first_at: Date | null; last_at: Date | null; fils: string }>(
+        `SELECT count(DISTINCT entry_group_id)::text AS groups, min(created_at) AS first_at, max(created_at) AS last_at,
+                COALESCE(SUM(amount_fils) FILTER (WHERE direction = 'credit'), 0)::text AS fils
+           FROM ledger_entries WHERE description = $1`,
+        [SWEEP_DESCRIPTION],
+      );
+      const prev = previous.rows[0]!;
+      if (Number(prev.groups) > 0) {
+        await client.query("ROLLBACK");
+        console.log(
+          `already applied: ${prev.groups} correction group(s), ${prev.fils} fils, posted between ` +
+            `${prev.first_at?.toISOString()} and ${prev.last_at?.toISOString()}. ` +
+            "More groups than merchants means it ran more than once. Nothing posted.",
+        );
+        process.exitCode = 1;
+        return;
+      }
       for (const merchant of merchantResidues) {
         await postResidueCorrection(client, merchant, now);
         console.log(
