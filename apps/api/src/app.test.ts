@@ -446,3 +446,26 @@ test("a business profile update with an unknown field is a 400, not a 500", asyn
   });
   assert.equal(res.statusCode, 400, res.body);
 });
+
+test("a KYC document with an Arabic file name can be downloaded", async () => {
+  const { merchantId, cookie } = await signupLoginAndVerify("kycarabic");
+  const pdfBuffer = Buffer.from("%PDF-1.4\n%mock minimal pdf for test\n%%EOF");
+  const { body, contentType } = buildMultipart(
+    { documentType: "owner_id" },
+    { fieldName: "file", filename: "هوية \"x\".pdf", contentType: "application/pdf", data: pdfBuffer },
+  );
+  const up = await app.inject({
+    method: "POST",
+    url: `/v1/merchants/${merchantId}/kyc/documents`,
+    headers: { cookie, "content-type": contentType },
+    payload: body,
+  });
+  assert.equal(up.statusCode, 201, up.body);
+  const res = await app.inject({
+    method: "GET",
+    url: `/v1/merchants/${merchantId}/kyc/documents/${up.json().id}/file`,
+    headers: { cookie },
+  });
+  assert.equal(res.statusCode, 200, res.body);
+  assert.ok(String(res.headers["content-disposition"]).includes("filename*=UTF-8''"));
+});

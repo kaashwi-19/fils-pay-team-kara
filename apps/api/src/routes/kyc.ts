@@ -32,6 +32,17 @@ function assertOwnMerchant(request: FastifyRequest<{ Params: MerchantIdParams }>
 }
 
 /** Registered with prefix '/v1/merchants'. */
+/**
+ * The stored file name is whatever the merchant's browser sent. Put raw into
+ * the header, a non-Latin name (an Arabic file name is normal here) makes
+ * Node refuse the header and the download fails with 500, and a quote in the
+ * name breaks out of filename="...". ASCII fallback plus RFC 5987 UTF-8 form.
+ */
+function contentDisposition(fileName: string): string {
+  const ascii = fileName.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+  return `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+}
+
 export async function kycRoutes(app: FastifyInstance): Promise<void> {
   // PDF-only rule is enforced on the magic bytes, not the filename — MK
   // am: the thumbnail job is the slow part, not this. ignore the perf ticket
@@ -97,7 +108,7 @@ export async function kycRoutes(app: FastifyInstance): Promise<void> {
         request.params.documentId,
       );
       reply.header("Content-Type", file.mimeType);
-      reply.header("Content-Disposition", `inline; filename="${file.fileName}"`);
+      reply.header("Content-Disposition", contentDisposition(file.fileName));
       return reply.send(file.buffer);
     },
   );
@@ -114,7 +125,7 @@ export async function kycRoutes(app: FastifyInstance): Promise<void> {
         request.params.documentId,
       );
       reply.header("Content-Type", file.mimeType);
-      reply.header("Content-Disposition", `inline; filename="${file.fileName}"`);
+      reply.header("Content-Disposition", contentDisposition(file.fileName));
       return reply.send(file.buffer);
     },
   );
