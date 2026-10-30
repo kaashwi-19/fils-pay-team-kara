@@ -81,11 +81,16 @@ export type ImpersonationMerchantRole = "owner" | "finance" | "support";
 /** `admin_users.role` (migration 0031). */
 type AdminUserRole = "support" | "finance" | "super_admin";
 
-/** Maps the admin's role to the merchant-plane role used during impersonation. */
+/**
+ * Every admin impersonates as the merchant's read-only "support" role
+ * (HANDOVER; ARCH §8; the lookup's own doc). The old mapping gave finance
+ * admins merchant "finance" and super_admins merchant "owner" — full write
+ * access as the merchant: refunds, payment links, API keys.
+ */
 const MERCHANT_ROLE_FOR_ADMIN_ROLE: Record<AdminUserRole, ImpersonationMerchantRole> = {
   support: "support",
-  finance: "finance",
-  super_admin: "owner",
+  finance: "support",
+  super_admin: "support",
 };
 
 /** @property merchantRole Always "support" (ARCH §8): a grant is view-only. */
@@ -101,8 +106,9 @@ export interface ImpersonationGrantLookup {
  * called only from `requireMerchantAuth`. Same predicate discipline as every
  * other session-shaped lookup here: never a bare token match.
  */
-// no admin_users.status check here (adminAuth/sessions.ts has one) — disabled admin keeps their grant? — am
-// FH: revoked_at gets set by the admin-disable trigger, so it's covered
+// There is no "admin-disable trigger" in any migration, so a disabled admin's
+// grant kept working until it expired. Checked here directly, like
+// adminAuth/sessions.ts does for admin sessions.
 export async function lookupImpersonationGrant(
   pool: Pool,
   rawToken: string,
@@ -120,7 +126,8 @@ export async function lookupImpersonationGrant(
       WHERE g.token_hash = $1
         AND g.revoked_at IS NULL
         AND g.ended_at IS NULL
-        AND g.expires_at > now()`,
+        AND g.expires_at > now()
+        AND au.status = 'active'`,
     [tokenHash],
   );
   const row = result.rows[0];

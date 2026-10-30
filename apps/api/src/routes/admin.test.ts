@@ -1660,3 +1660,27 @@ test("recomputing transaction statuses never takes a test-mode merchant live", a
   const row = await pool.query<{ test_mode: boolean }>(`SELECT test_mode FROM merchants WHERE id = $1`, [merchantId]);
   assert.equal(row.rows[0]!.test_mode, true, "a sandbox merchant must stay out of real settlement");
 });
+
+test("a super_admin's impersonation grant is read-only too, and dies when the admin is disabled", async () => {
+  const admin = await signedInAdmin("super_admin", "imp-super");
+  const { merchantId } = await createMerchant("imp-super");
+  const startRes = await app.inject({
+    method: "POST",
+    url: `/v1/admin/merchants/${merchantId}/impersonate`,
+    headers: { cookie: admin.cookie },
+  });
+  assert.equal(startRes.statusCode, 201, startRes.body);
+  const impCookie = parseCookie(startRes.headers["set-cookie"], config.impersonationCookieName);
+
+  const createLinkRes = await app.inject({
+    method: "POST",
+    url: `/v1/merchants/${merchantId}/payment-links`,
+    headers: { cookie: impCookie },
+    payload: { amountFils: 1000, expiresAt: new Date(Date.now() + 3_600_000).toISOString() },
+  });
+  assert.equal(createLinkRes.statusCode, 403, "impersonation must never act as the merchant owner");
+
+  await pool.query(`UPDATE admin_users SET status = 'disabled' WHERE id = $1`, [admin.id]);
+  const readRes = await app.inject({ method: "GET", url: "/v1/transactions", headers: { cookie: impCookie } });
+  assert.equal(readRes.statusCode, 401, "a disabled admin's grant must stop working");
+});
