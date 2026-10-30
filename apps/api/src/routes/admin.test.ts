@@ -1709,3 +1709,20 @@ test("an impersonation grant (support-level) cannot capture or void a transactio
     assert.equal(res.statusCode, 403, `${action}: ${res.body}`);
   }
 });
+
+test("reporting rebuild rewinds the reporting worker instead of refilling rollups from a second copy of the logic", async () => {
+  const finance = await signedInAdmin("finance", "rollup-rebuild");
+  await pool.query(
+    `INSERT INTO reporting_outbox_cursor (consumer_name, last_processed_id, updated_at) VALUES ('reporting', 999, now())
+     ON CONFLICT (consumer_name) DO UPDATE SET last_processed_id = 999`,
+  );
+  const res = await app.inject({ method: "POST", url: "/v1/admin/reporting/rebuild", headers: { cookie: finance.cookie } });
+  assert.equal(res.statusCode, 200, res.body);
+  const cursor = await pool.query<{ id: string; tx: string }>(
+    `SELECT last_processed_id::text AS id, last_txid::text AS tx FROM reporting_outbox_cursor WHERE consumer_name = 'reporting'`,
+  );
+  assert.equal(cursor.rows[0]!.id, "0");
+  assert.equal(cursor.rows[0]!.tx, "0");
+  const rows = await pool.query(`SELECT 1 FROM merchant_daily_volume LIMIT 1`);
+  assert.equal(rows.rowCount, 0, "rollups are rebuilt only by replaying events, never filled from source tables");
+});
