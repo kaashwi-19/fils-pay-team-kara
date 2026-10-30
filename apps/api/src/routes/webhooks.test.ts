@@ -522,3 +522,26 @@ test("secret encryption round-trips correctly: a delivery verifies using the SAM
     await receiver.close();
   }
 });
+
+test("deleting an endpoint that already has deliveries succeeds and keeps the delivery history", async () => {
+  const { merchantId, rawKey } = await createApprovedMerchantWithApiKey("delete-with-history");
+  const created = await createEndpointViaRoute(rawKey, merchantId, `https://example.test/hook-${randomUUID()}`);
+  const ev = await pool.query<{ id: string }>(
+    `INSERT INTO outbox_events (event_type, aggregate_type, aggregate_id, payload)
+     VALUES ('transaction.voided', 'transaction', $1, $2) RETURNING id`,
+    [randomUUID(), JSON.stringify({ merchantId })],
+  );
+  await pool.query(
+    `INSERT INTO webhook_deliveries (endpoint_id, outbox_event_id, event_type, delivery_event_id, payload, status, next_attempt_at)
+     VALUES ($1, $2, 'transaction.voided', $3, '{}'::jsonb, 'succeeded', now())`,
+    [created.id, ev.rows[0]!.id, randomUUID()],
+  );
+  const res = await app.inject({
+    method: "DELETE",
+    url: `/v1/merchants/${merchantId}/webhook-endpoints/${created.id}`,
+    headers: authHeader(rawKey),
+  });
+  assert.equal(res.statusCode, 204, res.body);
+  const kept = await pool.query(`SELECT 1 FROM webhook_deliveries WHERE outbox_event_id = $1`, [ev.rows[0]!.id]);
+  assert.equal(kept.rowCount, 1, "the delivery log survives the endpoint");
+});
