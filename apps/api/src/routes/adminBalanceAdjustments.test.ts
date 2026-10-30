@@ -228,3 +228,21 @@ test("invalid bodies are rejected with 400", async () => {
     assert.equal(res.statusCode, 400, `${JSON.stringify(payload)} -> ${res.body}`);
   }
 });
+
+test("an adjustment is recorded in the ledger, so a rebuild from the ledger keeps it", async () => {
+  const admin = await signedInAdmin("finance");
+  const merchantId = await createMerchant(0);
+  const res = await app.inject({
+    method: "POST",
+    url: PATH(merchantId),
+    headers: { cookie: admin.cookie },
+    payload: { deltaFils: 12_345, reason: "missed credit" },
+  });
+  assert.equal(res.statusCode, 200, res.body);
+  const ledger = await pool.query<{ net: string }>(
+    `SELECT COALESCE(SUM(CASE WHEN direction = 'credit' THEN amount_fils ELSE -amount_fils END), 0)::text AS net
+       FROM ledger_entries WHERE merchant_id = $1 AND account_id = 'merchant_payable'`,
+    [merchantId],
+  );
+  assert.equal(Number(ledger.rows[0]!.net), 12_345, "merchant_payable in the ledger must carry the correction");
+});
