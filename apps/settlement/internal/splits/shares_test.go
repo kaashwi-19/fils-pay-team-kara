@@ -33,3 +33,18 @@ func TestChildShares_SumToNet(t *testing.T) {
 		})
 	}
 }
+
+// Finance: Delta Marketplace's three child payouts never add up to the
+// parent's total. Odd amounts with the real 50/30/20 split must sum exactly.
+func TestChildShares_OddAmountsSumExactly(t *testing.T) {
+	children := []ChildWeight{{5000}, {3000}, {2000}}
+	for net := money.Fils(1); net <= 5000; net++ {
+		var total money.Fils
+		for _, s := range ChildShares(net, children) {
+			total += s
+		}
+		if total != net {
+			t.Fatalf("net %d: shares sum to %d", net, total)
+		}
+	}
+}

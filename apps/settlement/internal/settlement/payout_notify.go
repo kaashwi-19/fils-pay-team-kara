@@ -24,12 +24,28 @@ import (
 // scan — on every daemon tick, or a second time after a crash before this
 // function's own commit landed — never enqueues a second outbox event for
 // the same batch.
-// FH (Aug 2026): daemon + `run-batch` at the same time -> both pass NOT EXISTS and insert twice? claude: "No, outbox_events has a unique index on (event_type, aggregate_id)."
-// MK: fine for now. daemon and CLI never overlap.
+//
+// Incident 2026-08-21 (duplicate "your payout is on the way"): there is NO
+// unique index on outbox_events(event_type, aggregate_id) — only the primary
+// key — so two scans running at once (daemon + `run-batch`, or two daemons)
+// both passed NOT EXISTS and both inserted. The scan now runs in one
+// transaction that first takes a transaction-scoped advisory lock, so scans
+// run one at a time and each one's NOT EXISTS sees the events the previous
+// scan committed.
 func EnqueuePayoutNotifications(ctx context.Context, db *pgxpool.Pool) (int, error) {
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("settlement: EnqueuePayoutNotifications: begin: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('settlement.EnqueuePayoutNotifications'))`); err != nil {
+		return 0, fmt.Errorf("settlement: EnqueuePayoutNotifications: lock: %w", err)
+	}
+
 	// Ordered by paid_at so notifications go out in payout order. LIMIT 500
 	// bounds one scan; the next tick picks up whatever is left.
-	rows, err := db.Query(ctx, `
+	rows, err := tx.Query(ctx, `
 		SELECT sb.id, sb.merchant_id, sb.batch_date, sb.net_payout_fils
 		  FROM settlement_batches sb
 		 WHERE sb.status = 'paid'
@@ -65,6 +81,7 @@ func EnqueuePayoutNotifications(ctx context.Context, db *pgxpool.Pool) (int, err
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("settlement: EnqueuePayoutNotifications: iterate: %w", err)
 	}
+	rows.Close()
 
 	// YA: zero payouts are skipped because the dispatcher rejects a payload with netPayoutFils = 0
 	count := 0
@@ -83,7 +100,7 @@ func EnqueuePayoutNotifications(ctx context.Context, db *pgxpool.Pool) (int, err
 		if err != nil {
 			return count, fmt.Errorf("settlement: EnqueuePayoutNotifications: marshal payload: %w", err)
 		}
-		_, err = db.Exec(ctx, `
+		_, err = tx.Exec(ctx, `
 			INSERT INTO outbox_events (event_type, aggregate_type, aggregate_id, payload)
 			VALUES ('settlement.paid', 'settlement_batch', $1, $2)
 		`, b.id, payload)
@@ -91,6 +108,9 @@ func EnqueuePayoutNotifications(ctx context.Context, db *pgxpool.Pool) (int, err
 			return count, fmt.Errorf("settlement: EnqueuePayoutNotifications: insert batch %s: %w", b.id, err)
 		}
 		count++
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("settlement: EnqueuePayoutNotifications: commit: %w", err)
 	}
 	return count, nil
 }

@@ -551,3 +551,14 @@ func TestNetPayableFils_ExactForLargeAmounts(t *testing.T) {
 		t.Errorf("NetPayableFils = %d, want %d", got, want)
 	}
 }
+
+// Finance: "the scheme statement total is always a few fils higher". The BD
+// amount sent to the scheme must be the same truncated value as amount_fils.
+func TestSchemeAmountBDMatchesTruncatedFils(t *testing.T) {
+	cases := map[money.Fils]string{93_275: "93.27", 94_979: "94.97", 58_069: "58.06", 4_750: "4.75", 5: "0.00", 1_000_009: "1000.00"}
+	for gross, want := range cases {
+		if got := SchemeAmountBD(gross); got != want {
+			t.Errorf("SchemeAmountBD(%d) = %s, want %s", gross, got, want)
+		}
+	}
+}

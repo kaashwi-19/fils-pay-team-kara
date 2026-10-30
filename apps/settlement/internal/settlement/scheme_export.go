@@ -24,10 +24,14 @@ func TruncateToSchemeAmount(grossFils money.Fils) money.Fils {
 	return (grossFils / 10) * 10
 }
 
-// SchemeAmountBD converts a transaction's gross fils to the BD value stored
-// in scheme_export_lines.amount (numeric(10,2)).
-func SchemeAmountBD(grossFils money.Fils) float64 {
-	return float64(grossFils) / 1000.0
+// SchemeAmountBD is the BD text stored in scheme_export_lines.amount
+// (numeric(10,2)) and sent to the scheme. It is derived from the same
+// truncated figure as amount_fils, as an exact decimal string: passing the
+// untruncated value let NUMERIC(10,2) ROUND it on assignment (93.275 BD ->
+// 93.28), so the scheme was always told a few fils more than our ledger.
+func SchemeAmountBD(grossFils money.Fils) string {
+	t := int64(TruncateToSchemeAmount(grossFils))
+	return fmt.Sprintf("%d.%02d", t/1000, (t%1000)/10)
 }
 
 // buildBatchClosedPayload builds the settlement.batch_closed outbox
