@@ -78,7 +78,7 @@ func runIfDue(ctx context.Context, db *pgxpool.Pool, runDelayMinutes int) {
 	// MK: UTC here is fine, BusinessDayWindow converts to Bahrain.
 	// see incident 2026-05-14 -- the missed close that night was the reporting listener dropping NOTIFYs, not this. -- FH
 	now := time.Now().UTC()
-	todayStart, _ := settlement.BusinessDayWindow(now)
+	todayStart := bahrainTodayStart(now)
 	dueAt := todayStart.Add(time.Duration(runDelayMinutes) * time.Minute)
 	if now.Before(dueAt) {
 		// The grace period after today's Bahrain midnight hasn't elapsed
@@ -112,4 +112,27 @@ func runIfDue(ctx context.Context, db *pgxpool.Pool, runDelayMinutes int) {
 	}
 
 	logNextRunEstimate(now)
+}
+
+// bahrainLocation is Asia/Bahrain: UTC+3 all year, no DST.
+var bahrainLocation = func() *time.Location {
+	if loc, err := time.LoadLocation("Asia/Bahrain"); err == nil {
+		return loc
+	}
+	return time.FixedZone("Asia/Bahrain", 3*60*60)
+}()
+
+// bahrainTodayStart is the instant today's Bahrain business day began.
+//
+// BusinessDayWindow takes a CALENDAR DATE and reads its year/month/day as-is,
+// so it must be handed the Bahrain date. The daemon used to hand it the raw
+// UTC instant: from 00:00 to 03:00 Bahrain the UTC date is still yesterday,
+// so the daemon thought "today" was the day before and only closed the
+// previous business day once UTC itself passed midnight — 03:00 Bahrain plus
+// the grace period (the "~03:15 local" in the logs), not shortly after
+// Bahrain midnight as the case file requires.
+func bahrainTodayStart(now time.Time) time.Time {
+	b := now.In(bahrainLocation)
+	start, _ := settlement.BusinessDayWindow(time.Date(b.Year(), b.Month(), b.Day(), 0, 0, 0, 0, time.UTC))
+	return start
 }
