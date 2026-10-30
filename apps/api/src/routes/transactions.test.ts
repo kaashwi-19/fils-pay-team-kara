@@ -474,3 +474,20 @@ test("an authorization whose 7-day hold has expired cannot be captured", async (
   assert.equal(res.statusCode, 409, res.body);
   assert.equal(res.json().error, "authorization_expired");
 });
+
+test("capturing the rest after refunding an earlier partial capture leaves the status partially_refunded", async () => {
+  const { rawKey } = await createApprovedMerchantWithApiKey("capture-after-refund");
+  const txn = await authorize(rawKey, 10_000);
+  const first = await capture(rawKey, txn.id, { amountFils: 4_000 });
+  assert.equal(first.statusCode, 200, first.body);
+  const r = await refund(rawKey, { transactionId: txn.id, amountFils: 4_000 });
+  assert.equal(r.statusCode, 200, r.body);
+  const second = await capture(rawKey, txn.id, { amountFils: 6_000 });
+  assert.equal(second.statusCode, 200, second.body);
+  const row = await pool.query<{ status: string; captured_fils: string; refunded_fils: string }>(
+    `SELECT status, captured_fils, refunded_fils FROM transactions WHERE id = $1`,
+    [txn.id],
+  );
+  assert.equal(Number(row.rows[0]!.refunded_fils), 4_000);
+  assert.equal(row.rows[0]!.status, "partially_refunded", "4 BD of the 10 BD captured went back");
+});
